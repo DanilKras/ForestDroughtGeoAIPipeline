@@ -19,7 +19,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from utils.config_loader import load_config
-
 from .schemas import (
     BatchInferenceRequest,
     BatchInferenceResponse,
@@ -36,11 +35,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 config = load_config()
 
 FEATURE_COLUMNS = config["features"]["columns"]
-RISK_TIFF_PATH = os.getenv("RISK_MAP_PATH", config["paths"]["risk_map_tif"])
-FEATURE_STACK_PATH = os.getenv(
-    "FEATURE_STACK_PATH",
-    config["paths"].get("feature_stack_tif", "data/03_results/maps/sopron_features_stack.tif"),
-)
+VULNERABILITY_TIFF_PATH = os.getenv("RISK_MAP_PATH", config["paths"]["risk_map_tif"])
+FEATURE_STACK_PATH = os.getenv("FEATURE_STACK_PATH", config["paths"]["feature_stack_tif"])
 MODEL_PATH = os.getenv("MODEL_PATH", config["paths"]["model_weights"])
 CLIMATE_VARS = config.get("climate", {}).get("variables", ["tmax", "tmin", "ppt"])
 
@@ -50,15 +46,15 @@ app_state = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not Path(MODEL_PATH).exists():
-        raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
+        raise FileNotFoundError(f"Trained model artifact missing: {MODEL_PATH}")
 
     model = xgb.XGBClassifier()
     model.load_model(MODEL_PATH)
     app_state["model"] = model
     app_state["explainer"] = shap.TreeExplainer(model)
 
-    if Path(RISK_TIFF_PATH).exists():
-        app_state["raster_src"] = rasterio.open(RISK_TIFF_PATH)
+    if Path(VULNERABILITY_TIFF_PATH).exists():
+        app_state["raster_src"] = rasterio.open(VULNERABILITY_TIFF_PATH)
     if Path(FEATURE_STACK_PATH).exists():
         app_state["features_src"] = rasterio.open(FEATURE_STACK_PATH)
 
@@ -72,8 +68,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Dual-Engine GeoAI Inference API",
-    description="Config-Driven 11-Feature Local Precomputed vs Cloud Streaming Inference",
+    title="Multi-Scale GeoAI Forest Vulnerability API",
+    description="Dual-Engine Local Precomputed vs Cloud STAC/Zarr Streaming Inference",
     lifespan=lifespan,
 )
 
@@ -81,7 +77,7 @@ app = FastAPI(
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
-    first_msg = errors[0].get("msg", "Validation failed") if errors else "Invalid spatial input"
+    first_msg = errors[0].get("msg", "Validation error") if errors else "Invalid coordinate input"
     return JSONResponse(status_code=422, content={"detail": first_msg.replace("Value error, ", "")})
 
 
@@ -93,7 +89,7 @@ def predict_local(request: LocalInferenceRequest):
     if not src_risk or not src_feats:
         raise HTTPException(
             status_code=500,
-            detail="Local rasters are not initialized. Run generate_risk_map.py to build the 11-band stack.",
+            detail="Local feature stacks are not loaded. Run generate_risk_map to create raster files.",
         )
 
     coords = [(request.lon, request.lat)]
@@ -102,7 +98,7 @@ def predict_local(request: LocalInferenceRequest):
         sampled_prob = float(next(src_risk.sample(coords))[0])
         sampled_features = next(src_feats.sample(coords))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Raster sampling error: {e}")
+        raise HTTPException(status_code=500, detail=f"Raster sampling failure: {e}")
 
     if np.isclose(sampled_prob, -9999.0) or sampled_prob < 0 or np.isnan(sampled_prob):
         return InferenceResponse(
@@ -145,7 +141,7 @@ def predict_local(request: LocalInferenceRequest):
 def predict_batch(request: BatchInferenceRequest):
     src_risk = app_state.get("raster_src")
     if not src_risk:
-        raise HTTPException(status_code=500, detail="Risk raster is unavailable.")
+        raise HTTPException(status_code=500, detail="Vulnerability raster is unavailable.")
 
     coords = [(pt.lon, pt.lat) for pt in request.points]
     sampled = list(src_risk.sample(coords))
@@ -319,4 +315,4 @@ def predict_cloud(request: InferenceRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cloud streaming failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cloud streaming error: {str(e)}")

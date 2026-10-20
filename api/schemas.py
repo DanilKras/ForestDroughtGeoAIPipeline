@@ -69,8 +69,6 @@ class ExtractedFeatures(BaseModel):
 
 
 class InferenceRequest(BaseModel):
-    """Глобальный запрос координат (используется для Cloud Streaming)."""
-
     lat: float = Field(
         ...,
         description="Latitude in WGS84 coordinate system",
@@ -88,8 +86,6 @@ class InferenceRequest(BaseModel):
 
 
 class LocalInferenceRequest(InferenceRequest):
-    """Локальный запрос координат (строго валидируется по границам предрассчитанного растра)."""
-
     @model_validator(mode="after")
     def validate_spatial_extent(self) -> "LocalInferenceRequest":
         if not (MIN_LAT <= self.lat <= MAX_LAT and MIN_LON <= self.lon <= MAX_LON):
@@ -113,7 +109,7 @@ class InferenceResponse(BaseModel):
         ...,
         ge=0.0,
         le=1.0,
-        description="Armillaria ostoyae infection risk probability (0.0 to 1.0)",
+        description="Canopy drought vulnerability probability (Picea abies)",
         examples=[0.742],
     )
     risk_level: RiskLevel = Field(

@@ -28,8 +28,5 @@ data/01_raw/*
 !data/01_raw/.gitkeep
 data/02_processed/*
 !data/02_processed/.gitkeep
-data/03_results/*
-!data/03_results/.gitkeep
 
-models/*
 !models/.gitkeep

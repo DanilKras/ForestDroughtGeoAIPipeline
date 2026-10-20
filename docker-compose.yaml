@@ -86,6 +86,11 @@ services:
       - BACKEND_HOST=http://geoai-inference:8000
     depends_on:
       - geoai-inference
+    volumes:
+      - ./frontend/app.py:/app/app.py
+      - ./utils:/app/utils
+      - ./config:/app/config
+      - ./data:/app/data
     restart: unless-stopped
 volumes:
   postgres-db-volume:

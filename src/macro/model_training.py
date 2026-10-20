@@ -20,13 +20,13 @@ def train_spatial_sdm():
     features = config["features"]["columns"]
     data_path = Path(config["paths"]["features_advanced"])
     if not data_path.exists():
-        raise FileNotFoundError(f"Processed dataset not found at {data_path}")
+        raise FileNotFoundError(f"Feature dataset not found: {data_path}")
 
     df = pd.read_parquet(data_path)
 
     missing_cols = set(features) - set(df.columns)
     if missing_cols:
-        raise KeyError(f"Missing expected features in parquet dataset: {missing_cols}")
+        raise KeyError(f"Missing expected predictors: {missing_cols}")
 
     block_size = config["spatial"]["block_size_meters"]
     gdf = gpd.GeoDataFrame(
@@ -43,8 +43,10 @@ def train_spatial_sdm():
     gkf = GroupKFold(n_splits=n_splits)
     scores = []
 
+    model_params = config["model_params"]
+    logger.info(f"XGBoost parameters: {model_params}")
     logger.info(
-        f"Starting Spatial GroupKFold CV ({n_splits} splits) across {len(gdf)} records using {len(features)} features..."
+        f"Starting {n_splits}-fold Spatial GroupKFold CV ({block_size // 1000} km blocks) on {len(gdf)} observations."
     )
 
     for fold, (train_idx, val_idx) in enumerate(gkf.split(gdf, groups=gdf["spatial_block_id"])):
@@ -53,28 +55,28 @@ def train_spatial_sdm():
 
         if len(val_data["target"].unique()) < 2:
             logger.warning(
-                f"Fold {fold + 1} contains only a single class. Skipping ROC-AUC calculation."
+                f"Fold {fold + 1} contains only a single class. Skipping fold evaluation."
             )
             continue
 
-        model = xgb.XGBClassifier(**config["model_params"])
+        model = xgb.XGBClassifier(**model_params)
         model.fit(train_data[features], train_data["target"])
 
         preds_proba = model.predict_proba(val_data[features])[:, 1]
         auc = roc_auc_score(val_data["target"], preds_proba)
         scores.append(auc)
-        logger.info(f"Fold {fold + 1} | Spatial ROC-AUC: {auc:.3f}")
+        logger.info(f"Fold {fold + 1} | Spatial Block ROC-AUC: {auc:.3f}")
 
     mean_auc = pd.Series(scores).mean()
-    logger.info(f"Mean Spatial ROC-AUC ({len(features)} features): {mean_auc:.3f}")
+    logger.info(f"Mean Spatial ROC-AUC: {mean_auc:.3f}")
 
-    final_model = xgb.XGBClassifier(**config["model_params"])
+    final_model = xgb.XGBClassifier(**model_params)
     final_model.fit(gdf[features], gdf["target"])
 
     model_path = Path(config["paths"]["model_weights"])
     model_path.parent.mkdir(parents=True, exist_ok=True)
     final_model.save_model(str(model_path))
-    logger.info(f"Model weights saved to {model_path}")
+    logger.info(f"Trained model saved to: {model_path}")
 
     explainer = shap.TreeExplainer(final_model)
     sample_df = gdf[features].sample(min(1000, len(gdf)), random_state=42)
@@ -82,10 +84,12 @@ def train_spatial_sdm():
 
     shap_path = Path(config["paths"]["shap_summary_plot"])
     shap_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_values, sample_df, show=False)
     plt.savefig(shap_path, dpi=300, bbox_inches="tight")
     plt.close()
-    logger.info(f"SHAP summary plot successfully saved to {shap_path}")
+    logger.info(f"SHAP explanation plot saved to: {shap_path}")
 
 
 if __name__ == "__main__":

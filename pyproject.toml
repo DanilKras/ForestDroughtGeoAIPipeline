@@ -1,5 +1,5 @@
 [project]
-name = "armillariageoaipipeline"
+name = "canopy_drought_vulnerability_probability"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [

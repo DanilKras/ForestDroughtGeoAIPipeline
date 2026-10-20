@@ -29,14 +29,14 @@ def generate_risk_map() -> None:
     feature_columns = config["features"]["columns"]
     model_path = PROJECT_ROOT / config["paths"]["model_weights"]
     output_tif = PROJECT_ROOT / config["paths"]["risk_map_tif"]
-    feature_stack_tif = PROJECT_ROOT / config["paths"].get(
-        "feature_stack_tif", "data/03_results/maps/sopron_features_stack.tif"
-    )
+    feature_stack_tif = PROJECT_ROOT / config["paths"]["feature_stack_tif"]
 
     bbox = config["spatial"]["bbox"]
     min_lon, min_lat, max_lon, max_lat = bbox
 
-    logger.info(f"Generating risk map for region: {config['project']['region']}")
+    logger.info(
+        f"Generating landscape vulnerability raster for: {config['project']['region_name']}"
+    )
 
     stac_io = StacApiIO()
     stac_io.session.verify = False
@@ -52,11 +52,11 @@ def generate_risk_map() -> None:
         "GDAL_HTTP_UNSAFESSL": "YES",
     }
 
-    logger.info("Reading Copernicus DEM...")
+    logger.info("Extracting Copernicus DEM (30 m)...")
     search_dem = catalog.search(collections=["cop-dem-glo-30"], bbox=bbox)
     items_dem = list(search_dem.items())
     if not items_dem:
-        raise ValueError("DEM tile not found for bbox.")
+        raise ValueError(f"No Copernicus DEM tiles intersect bbox: {bbox}")
 
     dem_href = items_dem[0].assets["data"].href
 
@@ -87,7 +87,7 @@ def generate_risk_map() -> None:
     slope_safe = np.maximum(slope_rad, 0.001)
     twi_matrix = np.clip(np.log(cell_size_m / np.tan(slope_safe)), 0.0, 15.0).astype(np.float32)
 
-    logger.info("Reading and aligning ESA WorldCover...")
+    logger.info("Aligning ESA WorldCover (10 m) to target grid...")
     search_lc = catalog.search(collections=["esa-worldcover"], bbox=bbox)
     items_lc = list(search_lc.items())
     if not items_lc:
@@ -111,12 +111,12 @@ def generate_risk_map() -> None:
 
     valid_mask = (elevation_matrix > 0) & (landcover_matrix == 10)
     num_valid = np.count_nonzero(valid_mask)
-    logger.info(f"Target forest pixels for inference: {num_valid:,}")
+    logger.info(f"Target forest pixels for model inference: {num_valid:,}")
 
     if num_valid == 0:
         raise ValueError("No forest pixels found within the selected bounding box.")
 
-    logger.info("Extracting and aggregating TerraClimate variables...")
+    logger.info("Querying TerraClimate Zarr multidimensional array...")
     collection_clim = catalog.get_collection("terraclimate")
     zarr_url = collection_clim.assets["zarr-https"].href
     signed_url = planetary_computer.sign(zarr_url)
@@ -160,7 +160,7 @@ def generate_risk_map() -> None:
     ppt_coarse = ds_sub["ppt"]
 
     bio1_coarse = tmean_coarse.mean(dim="time")
-    bio4_coarse = (tmean_coarse.groupby("time.month").mean(dim="time").std(dim="month")) * 100
+    bio4_coarse = tmean_coarse.groupby("time.month").mean(dim="time").std(dim="month") * 100
     bio12_coarse = ppt_coarse.groupby("time.year").sum(dim="time").mean(dim="year")
     monthly_ppt = ppt_coarse.groupby("time.month").mean(dim="time")
     bio15_coarse = (monthly_ppt.std(dim="month") / (monthly_ppt.mean(dim="month") + 1e-6)) * 100
@@ -195,7 +195,7 @@ def generate_risk_map() -> None:
 
     X_valid = pd.DataFrame(features_dict)[feature_columns]
 
-    logger.info(f"Loading trained model from: {model_path}")
+    logger.info(f"Loading trained XGBoost model: {model_path}")
     clf = xgb.XGBClassifier()
     clf.load_model(str(model_path))
 
@@ -223,7 +223,7 @@ def generate_risk_map() -> None:
         blockysize=256,
     ) as dst:
         dst.write(risk_matrix, 1)
-    logger.info(f"Risk map successfully written to: {output_tif}")
+    logger.info(f"Landscape vulnerability raster written to: {output_tif}")
 
     feature_arrays_map = {
         "elevation": elevation_matrix,
@@ -262,9 +262,7 @@ def generate_risk_map() -> None:
             dst.write(layer, idx)
             dst.set_band_description(idx, col_name)
 
-    logger.info(
-        f"Features stack ({len(feature_columns)} bands) successfully written to: {feature_stack_tif}"
-    )
+    logger.info(f"11-band predictor stack written to: {feature_stack_tif}")
 
 
 if __name__ == "__main__":

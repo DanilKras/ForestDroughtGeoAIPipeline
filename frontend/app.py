@@ -21,8 +21,25 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 from streamlit_folium import st_folium
 
+from utils.config_loader import load_config
+
+config = load_config()
+REGION_NAME = config["project"].get("region_name", "Study Ecosystem")
+BBOX = config["spatial"]["bbox"]
+BBOX_CONFIG = {
+    "min_lon": BBOX[0],
+    "min_lat": BBOX[1],
+    "max_lon": BBOX[2],
+    "max_lat": BBOX[3],
+}
+
+DEFAULT_CENTER = [
+    (BBOX_CONFIG["min_lat"] + BBOX_CONFIG["max_lat"]) / 2,
+    (BBOX_CONFIG["min_lon"] + BBOX_CONFIG["max_lon"]) / 2,
+]
+
 st.set_page_config(
-    page_title="Armillaria Risk GeoAI | Sopron",
+    page_title=f"Forest Vulnerability GeoAI",
     page_icon="🌲",
     layout="wide",
 )
@@ -31,11 +48,9 @@ st.markdown(
     """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
         html, body, [class*="css"], .stMarkdown, .stText {
             font-family: 'Inter', sans-serif !important;
         }
-
         .block-container { padding-top: 1rem !important; padding-bottom: 2rem !important; }
         header { visibility: hidden !important; }
 
@@ -79,10 +94,6 @@ st.markdown(
             font-weight: 600;
             transition: all 0.2s ease-in-out;
         }
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -92,17 +103,16 @@ BACKEND_HOST = os.getenv("BACKEND_HOST", "http://localhost:8000")
 PREDICT_URL_LOCAL = f"{BACKEND_HOST}/predict/local"
 PREDICT_URL_CLOUD = f"{BACKEND_HOST}/predict/cloud"
 
-BOUNDARY_PATH = "data/00_external/sopron_forest_boundary.geojson"
-BBOX_SOPRON = {"min_lat": 47.55, "max_lat": 47.75, "min_lon": 16.45, "max_lon": 16.70}
+BOUNDARY_PATH = "data/00_external/focal_forest_boundary.geojson"
 
 if "map_center" not in st.session_state:
-    st.session_state.map_center = [47.68, 16.59]
+    st.session_state.map_center = DEFAULT_CENTER
 if "map_zoom" not in st.session_state:
     st.session_state.map_zoom = 12
 if "target_lat" not in st.session_state:
-    st.session_state.target_lat = 47.6812
+    st.session_state.target_lat = DEFAULT_CENTER[0]
 if "target_lon" not in st.session_state:
-    st.session_state.target_lon = 16.5843
+    st.session_state.target_lon = DEFAULT_CENTER[1]
 if "inference_results" not in st.session_state:
     st.session_state.inference_results = None
 if "prediction_history" not in st.session_state:
@@ -165,8 +175,8 @@ def export_history_to_gpkg(history_records: list) -> bytes:
         crs="EPSG:4326",
     )
     with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_file = Path(tmp_dir) / "sopron_inspections.gpkg"
-        gdf.to_file(tmp_file, layer="armillaria_inspections", driver="GPKG")
+        tmp_file = Path(tmp_dir) / "forest_inspections.gpkg"
+        gdf.to_file(tmp_file, layer="canopy_vulnerability_inspections", driver="GPKG")
         with open(tmp_file, "rb") as f:
             return f.read()
 
@@ -224,7 +234,9 @@ def plot_shap_bar(shap_dict: dict):
     )
     df["Abs_SHAP"] = df["SHAP Value"].abs()
     df = df.sort_values(by="Abs_SHAP", ascending=True)
-    df["Impact"] = df["SHAP Value"].apply(lambda x: "Increases Risk" if x > 0 else "Decreases Risk")
+    df["Impact"] = df["SHAP Value"].apply(
+        lambda x: "Increases Vulnerability" if x > 0 else "Decreases Vulnerability"
+    )
 
     fig = px.bar(
         df,
@@ -232,7 +244,10 @@ def plot_shap_bar(shap_dict: dict):
         y="Feature",
         orientation="h",
         color="Impact",
-        color_discrete_map={"Increases Risk": "#ef4444", "Decreases Risk": "#3b82f6"},
+        color_discrete_map={
+            "Increases Vulnerability": "#ef4444",
+            "Decreases Vulnerability": "#3b82f6",
+        },
     )
     fig.update_layout(
         height=260,
@@ -249,8 +264,10 @@ def plot_shap_bar(shap_dict: dict):
     return fig
 
 
-st.title("Sopron Forest GeoAI: Spatial Risk Analysis")
-st.caption("Autonomous inference using Cloud-Native STAC vs Local Precomputed Models.")
+st.title(f"Forest GeoAI: Drought Vulnerability")
+st.caption(
+    "Cloud-Native Multi-Scale Geospatial Inference (Copernicus DEM, WorldCover, TerraClimate Zarr, SoilGrids)."
+)
 
 raw_geojson, prepared_boundary, boundary_bounds = load_spatial_boundary(BOUNDARY_PATH)
 
@@ -262,9 +279,9 @@ with top_col2:
         f"**Lat:** `{st.session_state.target_lat:.5f}` | **Lon:** `{st.session_state.target_lon:.5f}`"
     )
 
-    st.markdown("##### Climate Horizon (CMIP6)")
+    st.markdown("##### Climate Projection Horizon")
     selected_scenario = st.selectbox(
-        "Ecological Niche Projection:",
+        "Vulnerability Envelope:",
         options=[
             "Baseline (Current Climate)",
             "SSP2-4.5 (2050 Horizon)",
@@ -277,33 +294,33 @@ with top_col2:
     st.markdown("##### Inference Engine")
     engine_mode = st.radio(
         "Backend Routing:",
-        options=["Local Edge (Sopron Forest)", "Cloud Streaming (Global)"],
+        options=[f"Local Precomputed ({REGION_NAME})", "Cloud Streaming (Global STAC/Zarr)"],
         captions=[
-            "Latency: <50ms. Uses local 11-band stack.",
-            "Latency: ~30s. Live STAC & Zarr queries.",
+            "Latency: <5ms. Uses local 11-band GeoTIFF stack.",
+            "Latency: ~15-30s. On-demand global planetary assets.",
         ],
         index=0,
     )
 
-    is_sopron_mode = "Local" in engine_mode
+    is_local_mode = "Local" in engine_mode
     in_bounds = (
-        BBOX_SOPRON["min_lat"] <= st.session_state.target_lat <= BBOX_SOPRON["max_lat"]
-        and BBOX_SOPRON["min_lon"] <= st.session_state.target_lon <= BBOX_SOPRON["max_lon"]
+        BBOX_CONFIG["min_lat"] <= st.session_state.target_lat <= BBOX_CONFIG["max_lat"]
+        and BBOX_CONFIG["min_lon"] <= st.session_state.target_lon <= BBOX_CONFIG["max_lon"]
     )
 
-    if is_sopron_mode and not in_bounds:
+    if is_local_mode and not in_bounds:
         st.warning(
-            "Target is outside the Sopron precomputed extent. Switch to 'Cloud Streaming' for global inference."
+            f"Point is outside focal BBOX [{BBOX_CONFIG['min_lon']}, {BBOX_CONFIG['min_lat']}, {BBOX_CONFIG['max_lon']}, {BBOX_CONFIG['max_lat']}]. Switch to 'Cloud Streaming' for global inference."
         )
         st.button("Run Spatial Inference", disabled=True, use_container_width=True)
     else:
         if st.button("Run Spatial Inference", type="primary", use_container_width=True):
-            target_endpoint = PREDICT_URL_LOCAL if is_sopron_mode else PREDICT_URL_CLOUD
-            call_timeout = 10 if is_sopron_mode else 120
+            target_endpoint = PREDICT_URL_LOCAL if is_local_mode else PREDICT_URL_CLOUD
+            call_timeout = 10 if is_local_mode else 120
             loading_msg = (
-                "Querying local feature stack..."
-                if is_sopron_mode
-                else "Extracting STAC assets & streaming Zarr..."
+                "Sampling local 11-band raster stack..."
+                if is_local_mode
+                else "Streaming STAC DEM, WorldCover & Zarr climate..."
             )
 
             with st.spinner(loading_msg):
@@ -347,8 +364,8 @@ with top_col1:
     m = folium.Map(
         location=st.session_state.map_center,
         zoom_start=st.session_state.map_zoom,
-        min_zoom=4,
-        max_zoom=16,
+        min_zoom=3,
+        max_zoom=17,
         tiles=None,
     )
 
@@ -368,23 +385,26 @@ with top_col1:
     ).add_to(m)
 
     scenario_map_files = {
-        "Baseline (Current Climate)": ("data/03_results/maps/sopron_armillaria_risk.tif", False),
+        "Baseline (Current Climate)": (
+            "data/03_results/maps/regional_vulnerability_map.tif",
+            False,
+        ),
         "SSP2-4.5 (2050 Horizon)": (
-            "data/03_results/maps/sopron_armillaria_risk_ssp245_2050.tif",
+            "data/03_results/maps/regional_vulnerability_ssp245_2050.tif",
             False,
         ),
         "SSP5-8.5 (2050 Extreme)": (
-            "data/03_results/maps/sopron_armillaria_risk_ssp585_2050.tif",
+            "data/03_results/maps/regional_vulnerability_ssp585_2050.tif",
             False,
         ),
         "Delta Shift: SSP5-8.5 vs Baseline": (
-            "data/03_results/maps/sopron_armillaria_delta_ssp585_2050.tif",
+            "data/03_results/maps/regional_vulnerability_delta_ssp585_2050.tif",
             True,
         ),
     }
 
     tif_target, is_delta_mode = scenario_map_files.get(
-        selected_scenario, ("data/03_results/maps/sopron_armillaria_risk.tif", False)
+        selected_scenario, ("data/03_results/maps/regional_vulnerability_map.tif", False)
     )
     risk_img, r_bounds = get_risk_raster_overlay(tif_target, is_delta=is_delta_mode)
 
@@ -401,7 +421,7 @@ with top_col1:
     if raw_geojson:
         folium.GeoJson(
             data=raw_geojson,
-            name="Sopron Forest Boundary",
+            name="Ecosystem Boundary",
             style_function=lambda f: {
                 "fillColor": "#3b82f6",
                 "fillOpacity": 0.06,
@@ -425,12 +445,12 @@ with top_col1:
             fill=True,
             fill_color=color,
             fill_opacity=0.85,
-            tooltip=f"Risk: {p_val * 100:.1f}%",
+            tooltip=f"Vulnerability: {p_val * 100:.1f}%",
         ).add_to(m)
 
     folium.Marker(
         [st.session_state.target_lat, st.session_state.target_lon],
-        popup=f"Selected: {st.session_state.target_lat:.4f}, {st.session_state.target_lon:.4f}",
+        popup=f"Target: {st.session_state.target_lat:.4f}, {st.session_state.target_lon:.4f}",
         icon=folium.Icon(color="red", icon="crosshairs", prefix="fa"),
     ).add_to(m)
 
@@ -441,7 +461,7 @@ with top_col1:
         height=430,
         use_container_width=True,
         returned_objects=["last_clicked", "center", "zoom"],
-        key="sopron_unified_map",
+        key="global_forest_map",
     )
 
     if map_data and map_data.get("last_clicked"):
@@ -471,7 +491,7 @@ if st.session_state.inference_results:
     b_col1, b_col2, b_col3 = st.columns([1.0, 1.8, 1.6], gap="medium")
 
     with b_col1:
-        st.markdown("### Infection Probability")
+        st.markdown("### Canopy Vulnerability")
         if not is_forest:
             st.markdown(
                 '<div class="risk-banner risk-nodata">Non-Forest / Excluded Area</div>',
@@ -486,22 +506,22 @@ if st.session_state.inference_results:
             )
             if prob >= 0.66:
                 st.markdown(
-                    '<div class="risk-banner risk-high">High Risk Zone</div>',
+                    '<div class="risk-banner risk-high">High Vulnerability Stand</div>',
                     unsafe_allow_html=True,
                 )
             elif prob >= 0.33:
                 st.markdown(
-                    '<div class="risk-banner risk-medium">Moderate Risk Zone</div>',
+                    '<div class="risk-banner risk-medium">Moderate Stress Zone</div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    '<div class="risk-banner risk-low">Low Risk / Healthy Stand</div>',
+                    '<div class="risk-banner risk-low">Resilient Canopy Stand</div>',
                     unsafe_allow_html=True,
                 )
 
     with b_col2:
-        st.markdown("### Factor Contribution (SHAP)")
+        st.markdown("### Attribution Drivers (SHAP)")
         shap_chart = plot_shap_bar(res.get("shap_values", {}))
         if shap_chart:
             st.plotly_chart(
@@ -510,10 +530,10 @@ if st.session_state.inference_results:
                 config={"displayModeBar": False},
             )
         else:
-            st.info("SHAP attribution unavailable for non-forest points.")
+            st.info("Attribution unavailable for non-forest locations.")
 
     with b_col3:
-        st.markdown("### Extracted Predictors (11 Variables)")
+        st.markdown("### Predictors (11 Variables)")
         feats = res.get("extracted_features")
         if is_forest and feats:
             c1, c2, c3 = st.columns(3)
@@ -535,7 +555,7 @@ if st.session_state.inference_results:
                 st.metric("Soil pH", f"{feats.get('soil_ph', 0):.2f}")
                 st.metric("Clay Content", f"{feats.get('soil_clay_percent', 0):.1f} %")
         else:
-            st.caption("No biological features for non-forest pixels.")
+            st.caption("No biological predictors extracted.")
 
 if st.session_state.prediction_history:
     st.markdown("---")
@@ -562,9 +582,9 @@ if st.session_state.prediction_history:
     with d_col1:
         gpkg_data = export_history_to_gpkg(st.session_state.prediction_history)
         st.download_button(
-            label="Download GPKG Layer",
+            label="Download GPKG Inspection Layer",
             data=gpkg_data,
-            file_name=f"armillaria_inspections_{datetime.now().strftime('%Y%m%d_%H%M')}.gpkg",
+            file_name=f"forest_inspections_{datetime.now().strftime('%Y%m%d_%H%M')}.gpkg",
             mime="application/geopackage+sqlite3",
             type="primary",
             use_container_width=True,

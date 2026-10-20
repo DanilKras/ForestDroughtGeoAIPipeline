@@ -8,12 +8,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.macro.data_extraction import fetch_gbif_occurrences
+from src.macro.data_extraction import extract_all_raw_data
 from src.macro.data_processing import process_and_thin_data
 from src.macro.feature_extraction import run_advanced_feature_extraction
+from src.macro.generate_drought_labels import extract_drought_resilience_labels
 from src.macro.inference import generate_risk_map
 from src.macro.model_training import train_spatial_sdm
-from src.macro.negative_sampling import generate_ecological_pseudo_absences
 from utils.generate_future_risk_maps import generate_future_projections
 
 default_args = {
@@ -28,26 +28,34 @@ default_args = {
 
 
 @dag(
-    dag_id="armillaria_geoai_pipeline",
+    dag_id="forest_drought_vulnerability_pipeline",
     default_args=default_args,
-    description="End-to-End 11-Feature GeoAI pipeline with CMIP6 Climate Projections",
+    description="Multi-Scale Cloud-Native GeoAI Pipeline: Forest Vulnerability to Hotter Droughts (CMIP6 / Zarr / STAC)",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["geoai", "species-distribution", "xgboost", "planetary-computer", "cmip6"],
+    tags=[
+        "geoai",
+        "forest-vulnerability",
+        "hotter-droughts",
+        "xgboost",
+        "spatial-cv",
+        "planetary-computer",
+        "cmip6",
+    ],
 )
-def armillaria_geoai_dag():
-    @task(task_id="extract_gbif_occurrences")
+def forest_drought_vulnerability_dag():
+    @task(task_id="ingest_forest_inventory_data")
     def task_extract():
-        fetch_gbif_occurrences()
+        extract_all_raw_data()
 
-    @task(task_id="spatial_rarefaction")
+    @task(task_id="spatial_rarefaction_1km")
     def task_thinning():
         process_and_thin_data()
 
-    @task(task_id="pseudo_absence_sampling")
+    @task(task_id="stratify_drought_resilience_labels")
     def task_sampling():
-        generate_ecological_pseudo_absences()
+        extract_drought_resilience_labels()
 
     @task(task_id="cloud_feature_engineering", execution_timeout=timedelta(hours=1))
     def task_features():
@@ -57,7 +65,7 @@ def armillaria_geoai_dag():
     def task_train():
         train_spatial_sdm()
 
-    @task(task_id="generate_spatial_inference")
+    @task(task_id="generate_spatial_vulnerability_map")
     def task_infer():
         generate_risk_map()
 
@@ -76,4 +84,4 @@ def armillaria_geoai_dag():
     t1 >> t2 >> t3 >> t4 >> t5 >> t6 >> t7
 
 
-dag_instance = armillaria_geoai_dag()
+dag_instance = forest_drought_vulnerability_dag()

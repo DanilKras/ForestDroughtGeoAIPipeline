@@ -1,18 +1,19 @@
 project:
-  name: "Armillaria_GeoAI_Pipeline"
-  target_species: "Armillaria ostoyae"
-  region: "Sopron_Hungary"
+  name: "Forest_Drought_Vulnerability_GeoAI"
+  target_phenomenon: "Canopy_Dieback_and_Drought_Vulnerability"
+  region_name: "Sopron_Fertő_Ecosystem"
+  macro_target_column: "target"
 
 paths:
-  raw_data: "data/01_raw/armillaria_europe.csv"
-  clean_gpkg: "data/02_processed/armillaria_clean.gpkg"
+  raw_data: "data/01_raw/forest_dieback_europe.parquet"
+  clean_gpkg: "data/02_processed/forest_dieback_clean.gpkg"
   features_combined: "data/02_processed/features_combined.csv"
   features_terrain_checkpoint: "data/02_processed/features_terrain_checkpoint.parquet"
   features_advanced: "data/02_processed/features_advanced.parquet"
 
-  model_weights: "models/armillaria_spatial_xgb.json"
-  risk_map_tif: "data/03_results/maps/sopron_armillaria_risk.tif"
-  feature_stack_tif: "data/03_results/maps/sopron_features_stack.tif"
+  model_weights: "models/forest_vulnerability_xgb.json"
+  risk_map_tif: "data/03_results/maps/regional_vulnerability_map.tif"
+  feature_stack_tif: "data/03_results/maps/regional_features_stack.tif"
   shap_summary_plot: "data/03_results/figures/spatial_shap_summary.png"
   eda_distribution_plot: "data/03_results/figures/clean_presence_distribution.png"
 
@@ -31,7 +32,7 @@ features:
     - "soil_clay_percent"
 
 spatial:
-  bbox: [ 16.45, 47.55, 16.70, 47.75 ]
+  bbox: [16.45, 47.55, 16.70, 47.75]
   crs_wgs84: "EPSG:4326"
   crs_projected: "EPSG:3035"
   block_size_meters: 150000
@@ -42,9 +43,10 @@ cv_params:
 model_params:
   n_estimators: 250
   learning_rate: 0.03
-  max_depth: 5
-  subsample: 0.8
-  colsample_bytree: 0.8
+  max_depth: 4
+  subsample: 0.7
+  colsample_bytree: 0.5
+  reg_lambda: 3.0
   random_state: 42
   eval_metric: "auc"
 
@@ -53,15 +55,16 @@ temporal:
   end_date: "2025-12-31"
 
 climate:
-  variables: [ "tmax", "tmin", "ppt" ]
+  variables: ["tmax", "tmin", "ppt"]
 
 sentinel2:
   max_cloud_cover: 20
-  bands: [ "B04", "B08", "B11", "SCL" ]
+  bands: ["B04", "B08", "B11", "SCL"]
 
 data_source:
-  type: "GBIF"
-  local_path: ""
+  type: "local"
+  local_path: "data/01_raw/EUForestspecies.csv"
+  target_records: 70000
 
 pseudo_absences:
   min_dist_meters: 5000

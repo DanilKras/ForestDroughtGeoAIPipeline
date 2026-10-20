@@ -22,9 +22,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def extract_point_from_raster(row, catalog, env_kwargs):
-    """
-    Extracts terrain features for a given point from Copernicus DEM and ESA WorldCover.
-    """
     lat, lon = row["lat"], row["lon"]
     point_geom = {"type": "Point", "coordinates": [lon, lat]}
     cell_size_m = 30.0
@@ -73,15 +70,15 @@ def extract_point_from_raster(row, catalog, env_kwargs):
                     landcover = int(next(src.sample([(lon, lat)]))[0])
 
     except Exception as e:
-        logger.warning(f"Failed extraction for gbif_id {row.get('gbif_id')}: {e}")
+        logger.warning(f"Feature query failed for observation {row.get('obs_id')}: {e}")
 
-    return row["gbif_id"], elevation, slope_deg, northness, twi, landcover
+    return row["obs_id"], elevation, slope_deg, northness, twi, landcover
 
 
 def run_advanced_feature_extraction() -> pd.DataFrame:
     config = load_config()
 
-    input_path = config["paths"]["features_combined"]
+    input_path = Path(config["paths"]["features_combined"])
     output_path = Path(config["paths"]["features_advanced"])
     checkpoint_path = Path(config["paths"]["features_terrain_checkpoint"])
 
@@ -103,14 +100,26 @@ def run_advanced_feature_extraction() -> pd.DataFrame:
         "GDAL_HTTP_UNSAFESSL": "YES",
     }
 
-    if checkpoint_path.exists():
-        logger.info(f"Loading cached terrain features from: {checkpoint_path}")
-        df = pd.read_parquet(checkpoint_path)
-    else:
-        logger.info(f"Loading input samples: {input_path}")
-        df = pd.read_csv(input_path)
+    logger.info(f"Loading input samples from: {input_path}")
+    df_labels = pd.read_csv(input_path)
 
-        logger.info(f"Querying DEM morphometry & WorldCover for {len(df)} points...")
+    if checkpoint_path.exists():
+        logger.info(f"Loading cached terrain predictors: {checkpoint_path}")
+        df_cached = pd.read_parquet(checkpoint_path)
+        # Sync updated target from features_combined to avoid target inconsistency
+        terrain_cols = [
+            "obs_id",
+            "elevation",
+            "slope_deg",
+            "northness_aspect",
+            "twi_moisture_index",
+            "landcover_class",
+        ]
+        cached_terrain = df_cached[[c for c in terrain_cols if c in df_cached.columns]]
+        df = df_labels.merge(cached_terrain, on="obs_id", how="inner")
+    else:
+        df = df_labels.copy()
+        logger.info(f"Querying Copernicus DEM & ESA WorldCover for {len(df)} points...")
         terrain_results = []
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [
@@ -118,10 +127,10 @@ def run_advanced_feature_extraction() -> pd.DataFrame:
                 for _, row in df.iterrows()
             ]
             for f in tqdm(as_completed(futures), total=len(df), desc="DEM & WorldCover"):
-                gbif_id, elev, slope, north, twi, lc = f.result()
+                obs_id, elev, slope, north, twi, lc = f.result()
                 terrain_results.append(
                     {
-                        "gbif_id": gbif_id,
+                        "obs_id": obs_id,
                         "elevation": elev,
                         "slope_deg": slope,
                         "northness_aspect": north,
@@ -130,7 +139,7 @@ def run_advanced_feature_extraction() -> pd.DataFrame:
                     }
                 )
 
-        df = df.merge(pd.DataFrame(terrain_results), on="gbif_id", how="left")
+        df = df.merge(pd.DataFrame(terrain_results), on="obs_id", how="left")
         df = df.dropna(subset=["elevation", "landcover_class", "slope_deg"])
         df = df[df["elevation"] > 0]
 
@@ -139,7 +148,7 @@ def run_advanced_feature_extraction() -> pd.DataFrame:
         logger.info(f"Saved terrain checkpoint to: {checkpoint_path}")
 
     logger.info(
-        f"Streaming TerraClimate variables ({climate_vars}) from {start_date} to {end_date}..."
+        f"Streaming TerraClimate Zarr multidimensional array ({start_date} to {end_date})..."
     )
     collection = catalog.get_collection("terraclimate")
     zarr_url = collection.assets["zarr-https"].href
@@ -175,7 +184,7 @@ def run_advanced_feature_extraction() -> pd.DataFrame:
         cv_ppt = (monthly_ppt.std(dim="month") / (monthly_ppt.mean(dim="month") + 1e-6)) * 100
         df["bio15_precip_seasonality"] = cv_ppt.values
 
-    logger.info("Enriching observations with ISRIC SoilGrids 0-5cm properties...")
+    logger.info("Enriching observations with ISRIC SoilGrids 2.0 (pH and clay fractions)...")
     ph_vals, clay_vals = [], []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="SoilGrids Query"):
         try:
