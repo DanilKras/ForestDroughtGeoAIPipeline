@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from utils.config_loader import load_config
+
 from .schemas import (
     BatchInferenceRequest,
     BatchInferenceResponse,
