@@ -17,7 +17,7 @@ The architecture bridges the scale gap by uniting **macro-scale regional bioclim
 | :---: | :---: |
 | ![Interactive UI Preview](data/03_results/figures/dashboard_preview.png) | ![SHAP Beeswarm Summary](data/03_results/figures/spatial_shap_summary.png) |
 
-> 🔗 **Video Walkthrough:** [Project Demonstration Video](https://drive.google.com/file/d/1AI1xZWvd9r8_0N2thKkQfDaEZZnTEhwO/view?usp=sharing)
+> 🔗 **Video Walkthrough:** [Project Demonstration Video](https://drive.google.com/file/d/1ZfSfTBwKpOTrdrGbKoAzGnVFcybMXxF1/view?usp=sharing)
 
 ---
 
