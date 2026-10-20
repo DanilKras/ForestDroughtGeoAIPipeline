@@ -39,7 +39,7 @@ DEFAULT_CENTER = [
 ]
 
 st.set_page_config(
-    page_title=f"Forest Vulnerability GeoAI",
+    page_title="Forest Vulnerability GeoAI",
     page_icon="🌲",
     layout="wide",
 )
@@ -264,7 +264,7 @@ def plot_shap_bar(shap_dict: dict):
     return fig
 
 
-st.title(f"Forest GeoAI: Drought Vulnerability")
+st.title("Forest GeoAI: Drought Vulnerability")
 st.caption(
     "Cloud-Native Multi-Scale Geospatial Inference (Copernicus DEM, WorldCover, TerraClimate Zarr, SoilGrids)."
 )
