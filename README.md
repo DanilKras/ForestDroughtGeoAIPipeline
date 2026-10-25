@@ -1,6 +1,6 @@
 # Forest Vulnerability to Hotter Droughts: Multi-Scale Cloud-Native GeoAI Pipeline
 
-[![CI Pipeline](https://github.com/DanilKras/ArmillariaGeoAIPipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/DanilKras/ArmillariaGeoAIPipeline/actions/workflows/ci.yml)
+[![CI Pipeline](https://github.com/DanilKras/ForestDroughtGeoAIPipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/DanilKras/ForestDroughtGeoAIPipeline/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![DVC](https://img.shields.io/badge/data-versioned%20by%20DVC-orange.svg)](https://dvc.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -81,7 +81,7 @@ The architecture bridges the scale gap by uniting **macro-scale regional bioclim
 ├── config/                         # Centralized Single Source of Truth (SSOT)
 │   └── params.yaml                 # Ecological predictors, spatial bbox, and hyperparams
 ├── dags/                           # Workflow orchestration
-│   └── armillaria_pipeline_dag.py  # Apache Airflow automated DAG
+│   └── pipeline_dag.py  # Apache Airflow automated DAG
 ├── data/                           # Data directory managed via DVC
 │   ├── 01_raw/                     # Raw occurrences (EUForestspecies.csv, forest_dieback_europe.parquet)
 │   ├── 02_processed/               # Clean GPKG, extracted Parquet features & checkpoints
@@ -137,8 +137,10 @@ The architecture bridges the scale gap by uniting **macro-scale regional bioclim
 
 ```bash
 # Clone the repository
-git clone [https://github.com/DanilKras/ArmillariaGeoAIPipeline.git](https://github.com/DanilKras/ArmillariaGeoAIPipeline.git)
-cd ArmillariaGeoAIPipeline
+git clone [https://github.com/DanilKras/ForestDroughtGeoAIPipeline
+.git](https://github.com/DanilKras/ForestDroughtGeoAIPipeline
+.git)
+cd ForestDroughtGeoAIPipeline
 
 # Create virtual environment and install dependencies
 uv venv .venv
@@ -199,6 +201,6 @@ python -m utils.generate_future_risk_maps
 3. Hierarchical Multi-Scale Paradigm: The macro-scale model provides an ecological prior ($P_\text{macro}$ at $30\text{ m}$), which acts as a Bayesian constraint for micro-scale deep learning models diagnosing individual tree crowns from UAV LiDAR ($1\text{ m}$ CHM), ultra-high-resolution orthophotos ($20\text{ cm}$), and multi-temporal Sentinel-1/2 time series.
 4. Weak Supervision under Ground-Truth Scarcity: Rather than relying on non-existent manual pathogen/dieback annotations across hundreds of hectares, the micro-pipeline leverages allometric scaling anomalies and temporal water-index dynamics (following weakly supervised frameworks in Remote Sensing of Environment, 2026).
 
-### 5. License
+### 6. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
