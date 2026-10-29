@@ -1,5 +1,5 @@
-import sys
 from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -59,9 +59,7 @@ def evaluate_test_set() -> None:
             ids = batch["tree_id"]
 
             outputs = model(micro, meso)
-            logits = outputs.get(
-                "stress_logits", outputs.get("logits", list(outputs.values())[0])
-            )
+            logits = outputs.get("stress_logits", outputs.get("logits", list(outputs.values())[0]))
             probs = torch.sigmoid(logits).cpu().numpy().flatten()
 
             y_true.extend(labels)

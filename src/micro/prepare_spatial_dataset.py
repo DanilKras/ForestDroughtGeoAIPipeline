@@ -1,7 +1,7 @@
 from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
-import pyogrio
 import rasterio
 import torch
 from shapely.geometry import box
@@ -103,9 +103,9 @@ def run_pipeline() -> None:
         std = group.std()
         return (group - mean) / (std if std > 1e-4 else 1.0)
 
-    gdf_clean["z_crown"] = gdf_clean.groupby(["FFJ_KOD", "age_class"])[
-        "log_crown_ratio"
-    ].transform(calc_log_zscore)
+    gdf_clean["z_crown"] = gdf_clean.groupby(["FFJ_KOD", "age_class"])["log_crown_ratio"].transform(
+        calc_log_zscore
+    )
     gdf_clean["is_stressed"] = (gdf_clean["z_crown"] <= -1.65).astype(int)
 
     gdf_clean["proxy_stress_label"] = gdf_clean["is_stressed"].astype(float)
@@ -172,9 +172,9 @@ def validate_first_batch() -> None:
         with rasterio.open(PATH_DRM_TIF) as ref:
             prof = ref.profile.copy()
             prof.update(count=6, dtype=rasterio.float32)
-            dummy_data = np.random.uniform(
-                0.1, 0.8, (6, ref.height // 10, ref.width // 10)
-            ).astype(np.float32)
+            dummy_data = np.random.uniform(0.1, 0.8, (6, ref.height // 10, ref.width // 10)).astype(
+                np.float32
+            )
             with rasterio.open(PATH_SENTINEL_TIF, "w", **prof) as dst:
                 dst.write(dummy_data)
 

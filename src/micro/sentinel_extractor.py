@@ -1,12 +1,13 @@
 from pathlib import Path
 from typing import Dict, Tuple
+
 import geopandas as gpd
 import numpy as np
 import planetary_computer as pc
 import rasterio
 from pystac_client import Client
-from rasterio.transform import from_bounds
 from rasterio.enums import Resampling
+from rasterio.transform import from_bounds
 from rasterio.warp import reproject
 from shapely.geometry import box
 

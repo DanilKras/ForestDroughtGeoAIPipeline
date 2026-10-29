@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import numpy as np
 import rasterio
 
@@ -18,9 +19,7 @@ def generate_canopy_height_model(
             raise ValueError("DFM and DDM transforms/CRS do not match.")
 
         profile = src_dfm.profile.copy()
-        profile.update(
-            dtype=rasterio.float32, nodata=-9999.0, compress="deflate", count=1
-        )
+        profile.update(dtype=rasterio.float32, nodata=-9999.0, compress="deflate", count=1)
 
         output_chm_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -30,14 +29,10 @@ def generate_canopy_height_model(
                 dfm_chunk = src_dfm.read(1, window=window).astype(np.float32)
                 ddm_chunk = src_ddm.read(1, window=window).astype(np.float32)
 
-                valid_mask = (dfm_chunk != src_dfm.nodata) & (
-                    ddm_chunk != src_ddm.nodata
-                )
+                valid_mask = (dfm_chunk != src_dfm.nodata) & (ddm_chunk != src_ddm.nodata)
 
                 chm_chunk = np.full_like(dfm_chunk, -9999.0)
-                chm_chunk[valid_mask] = (
-                    dfm_chunk[valid_mask] - ddm_chunk[valid_mask]
-                )
+                chm_chunk[valid_mask] = dfm_chunk[valid_mask] - ddm_chunk[valid_mask]
 
                 chm_chunk[(chm_chunk < 0.0) | (chm_chunk > 50.0)] = 0.0
 
