@@ -25,6 +25,9 @@ from utils.config_loader import load_config
 
 config = load_config()
 REGION_NAME = config["project"].get("region_name", "Study Ecosystem")
+RISK_MAP_PATH = config["paths"].get(
+    "risk_map_tif", "data/03_results/maps/regional_vulnerability_map.tif"
+)
 BBOX = config["spatial"]["bbox"]
 BBOX_CONFIG = {
     "min_lon": BBOX[0],
@@ -135,7 +138,7 @@ def load_spatial_boundary(geojson_path: str):
 
 
 @st.cache_data(show_spinner=False)
-def get_risk_raster_overlay(tif_path: str, is_delta: bool = False):
+def get_risk_raster_overlay(tif_path: str):
     if not os.path.exists(tif_path):
         return None, None
     try:
@@ -148,15 +151,9 @@ def get_risk_raster_overlay(tif_path: str, is_delta: bool = False):
             )
 
             rgba = np.zeros((*data.shape, 4), dtype=np.uint8)
-
-            if is_delta:
-                mask = (data >= -1.0) & (data <= 1.0) & (data != -9999.0)
-                norm = plt.Normalize(vmin=-0.4, vmax=0.4)
-                cmap = plt.colormaps["bwr"]
-            else:
-                mask = (data >= 0.0) & (data <= 1.0) & (data != -9999.0)
-                norm = plt.Normalize(vmin=0.0, vmax=1.0)
-                cmap = plt.colormaps["YlOrRd"]
+            mask = (data >= 0.0) & (data <= 1.0) & (data != -9999.0)
+            norm = plt.Normalize(vmin=0.0, vmax=1.0)
+            cmap = plt.colormaps["YlOrRd"]
 
             colored = (cmap(norm(data)) * 255).astype(np.uint8)
             rgba[mask] = colored[mask]
@@ -279,18 +276,6 @@ with top_col2:
         f"**Lat:** `{st.session_state.target_lat:.5f}` | **Lon:** `{st.session_state.target_lon:.5f}`"
     )
 
-    st.markdown("##### Climate Projection Horizon")
-    selected_scenario = st.selectbox(
-        "Vulnerability Envelope:",
-        options=[
-            "Baseline (Current Climate)",
-            "SSP2-4.5 (2050 Horizon)",
-            "SSP5-8.5 (2050 Extreme)",
-            "Delta Shift: SSP5-8.5 vs Baseline",
-        ],
-        index=0,
-    )
-
     st.markdown("##### Inference Engine")
     engine_mode = st.radio(
         "Backend Routing:",
@@ -384,36 +369,14 @@ with top_col1:
         control=True,
     ).add_to(m)
 
-    scenario_map_files = {
-        "Baseline (Current Climate)": (
-            "data/03_results/maps/regional_vulnerability_map.tif",
-            False,
-        ),
-        "SSP2-4.5 (2050 Horizon)": (
-            "data/03_results/maps/regional_vulnerability_ssp245_2050.tif",
-            False,
-        ),
-        "SSP5-8.5 (2050 Extreme)": (
-            "data/03_results/maps/regional_vulnerability_ssp585_2050.tif",
-            False,
-        ),
-        "Delta Shift: SSP5-8.5 vs Baseline": (
-            "data/03_results/maps/regional_vulnerability_delta_ssp585_2050.tif",
-            True,
-        ),
-    }
-
-    tif_target, is_delta_mode = scenario_map_files.get(
-        selected_scenario, ("data/03_results/maps/regional_vulnerability_map.tif", False)
-    )
-    risk_img, r_bounds = get_risk_raster_overlay(tif_target, is_delta=is_delta_mode)
+    risk_img, r_bounds = get_risk_raster_overlay(RISK_MAP_PATH)
 
     if risk_img is not None:
         ImageOverlay(
             image=risk_img,
             bounds=r_bounds,
             opacity=0.65,
-            name=f"{selected_scenario} Layer",
+            name="Vulnerability Layer",
             overlay=True,
             interactive=False,
         ).add_to(m)

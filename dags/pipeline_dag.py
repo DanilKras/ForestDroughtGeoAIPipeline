@@ -14,7 +14,6 @@ from src.macro.feature_extraction import run_advanced_feature_extraction
 from src.macro.generate_drought_labels import extract_drought_resilience_labels
 from src.macro.inference import generate_risk_map
 from src.macro.model_training import train_spatial_sdm
-from utils.generate_future_risk_maps import generate_future_projections
 
 default_args = {
     "owner": "danil",
@@ -30,7 +29,7 @@ default_args = {
 @dag(
     dag_id="forest_drought_vulnerability_pipeline",
     default_args=default_args,
-    description="Multi-Scale Cloud-Native GeoAI Pipeline: Forest Vulnerability to Hotter Droughts (CMIP6 / Zarr / STAC)",
+    description="Multi-Scale Cloud-Native GeoAI Pipeline: Forest Vulnerability to Hotter Droughts",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
@@ -41,7 +40,6 @@ default_args = {
         "xgboost",
         "spatial-cv",
         "planetary-computer",
-        "cmip6",
     ],
 )
 def forest_drought_vulnerability_dag():
@@ -69,19 +67,14 @@ def forest_drought_vulnerability_dag():
     def task_infer():
         generate_risk_map()
 
-    @task(task_id="generate_cmip6_climate_projections")
-    def task_projections():
-        generate_future_projections()
-
     t1 = task_extract()
     t2 = task_thinning()
     t3 = task_sampling()
     t4 = task_features()
     t5 = task_train()
     t6 = task_infer()
-    t7 = task_projections()
 
-    t1 >> t2 >> t3 >> t4 >> t5 >> t6 >> t7
+    t1 >> t2 >> t3 >> t4 >> t5 >> t6
 
 
 dag_instance = forest_drought_vulnerability_dag()
