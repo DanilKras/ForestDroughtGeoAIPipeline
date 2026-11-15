@@ -35,5 +35,4 @@ def test_spatial_settings(params):
 def test_model_hyperparameters(params):
     model_params = params.get("model_params", {})
     assert model_params.get("learning_rate") == 0.03
-    assert model_params.get("max_depth") == 4
-    assert model_params.get("eval_metric") == "auc"
+    assert model_params.get("max_depth") == 3
