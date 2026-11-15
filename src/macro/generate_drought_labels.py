@@ -59,7 +59,9 @@ def extract_drought_resilience_labels(target_year: Optional[int] = None) -> pd.D
 
     summer_start = f"{year}-{season_start}"
     summer_end = f"{year}-{season_end}"
-    logger.info(f"Extracting hydrothermal indicators (PPT, PET, TMAX) for {summer_start}..{summer_end}...")
+    logger.info(
+        f"Extracting hydrothermal indicators (PPT, PET, TMAX) for {summer_start}..{summer_end}..."
+    )
 
     lats_da = xr.DataArray(gdf_forest.geometry.y.values, dims="points")
     lons_da = xr.DataArray(gdf_forest.geometry.x.values, dims="points")
@@ -99,7 +101,9 @@ def extract_drought_resilience_labels(target_year: Optional[int] = None) -> pd.D
 
     n_samples = min(len(df_vulnerable), len(df_resilient))
     if n_samples < 50:
-        logger.warning("Quantile partitioning produced too few observations. Applying median split...")
+        logger.warning(
+            "Quantile partitioning produced too few observations. Applying median split..."
+        )
         median_cwd = float(np.nanmedian(cwd))
         df_vulnerable = gdf_forest[gdf_forest["summer_cwd_mm"] >= median_cwd].copy()
         df_vulnerable["target"] = 1

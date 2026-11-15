@@ -91,9 +91,7 @@ def train_spatial_sdm():
     n_splits = config.get("cv_params", {}).get("n_splits", 5)
     model_params = config["model_params"]
 
-    logger.info(
-        f"1. Model ({primary_year} Target, Climate strictly < {primary_year}-01-01)"
-    )
+    logger.info(f"1. Model ({primary_year} Target, Climate strictly < {primary_year}-01-01)")
     auc_clean_full = evaluate_spatial_cv(
         df=df,
         feature_cols=features,

@@ -135,7 +135,9 @@ def _extract_soilgrids_vrt(df: pd.DataFrame, env_kwargs: dict) -> pd.DataFrame:
                 ph_vals[valid_ph] = raw_ph[valid_ph] / 10.0
                 clay_vals[valid_clay] = raw_clay[valid_clay] / 10.0
     except Exception as e:
-        logger.warning(f"SoilGrids VRT batch read fallback triggered ({e}), using regional defaults.")
+        logger.warning(
+            f"SoilGrids VRT batch read fallback triggered ({e}), using regional defaults."
+        )
 
     return pd.DataFrame(
         {
@@ -234,7 +236,9 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         lc_items_all = list(catalog.search(collections=["esa-worldcover"], bbox=total_bbox).items())
         lc_items_2021 = [it for it in lc_items_all if "2021" in it.id] or lc_items_all
         lc_tile_groups = _assign_points_to_tiles(df_missing, lc_items_2021)
-        logger.info(f"Grouped {len(df_missing)} points into {len(lc_tile_groups)} WorldCover tiles.")
+        logger.info(
+            f"Grouped {len(df_missing)} points into {len(lc_tile_groups)} WorldCover tiles."
+        )
 
         lc_rows = []
         with ThreadPoolExecutor(max_workers=4) as executor:
@@ -323,7 +327,9 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         soil_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
         if soil_ckpt_path.exists():
             df_old_s = pd.read_parquet(soil_ckpt_path)
-            df_soil_save = pd.concat([df_old_s[soil_cols], df[soil_cols]], ignore_index=True).drop_duplicates("obs_id")
+            df_soil_save = pd.concat(
+                [df_old_s[soil_cols], df[soil_cols]], ignore_index=True
+            ).drop_duplicates("obs_id")
         else:
             df_soil_save = df[soil_cols].drop_duplicates("obs_id")
         df_soil_save.to_parquet(soil_ckpt_path, engine="pyarrow", compression="snappy")

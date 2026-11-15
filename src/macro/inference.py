@@ -149,7 +149,9 @@ def generate_risk_map() -> None:
     end_date = f"{forecast_year - 1}-12-31"
     climate_vars = config.get("climate", {}).get("variables", ["tmax", "tmin", "ppt"])
 
-    logger.info(f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} forecast...")
+    logger.info(
+        f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} forecast..."
+    )
     ds_sub = (
         ds[climate_vars]
         .sel(
