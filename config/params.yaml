@@ -7,8 +7,10 @@ project:
 paths:
   raw_data: "data/01_raw/forest_dieback_europe.parquet"
   clean_gpkg: "data/02_processed/forest_dieback_clean.gpkg"
+  processed_dir: "data/02_processed"
   features_combined: "data/02_processed/features_combined.csv"
   features_terrain_checkpoint: "data/02_processed/features_terrain_checkpoint.parquet"
+  soil_checkpoint: "data/02_processed/features_soil_checkpoint.parquet"
   features_advanced: "data/02_processed/features_advanced.parquet"
 
   model_weights: "models/forest_vulnerability_xgb.json"
@@ -28,6 +30,14 @@ features:
     - "bio4_temp_seasonality"
     - "bio12_annual_precip"
     - "bio15_precip_seasonality"
+    - "soil_ph"
+    - "soil_clay_percent"
+  static_columns:
+    - "elevation"
+    - "slope_deg"
+    - "northness_aspect"
+    - "twi_moisture_index"
+    - "landcover_class"
     - "soil_ph"
     - "soil_clay_percent"
 
@@ -51,8 +61,12 @@ model_params:
   eval_metric: "auc"
 
 temporal:
-  start_date: "1995-01-01"
-  end_date: "2025-12-31"
+  baseline_start_date: "1995-01-01"
+  target_year: 2018
+  validation_years: [2020]
+  forecast_year: 2025
+  target_season_start: "06-01"
+  target_season_end: "08-31"
 
 climate:
   variables: ["tmax", "tmin", "ppt"]
@@ -84,12 +98,13 @@ micro:
   sentinel:
     collection_s2: "sentinel-2-l2a"
     collection_s1: "sentinel-1-rtc"
-    date_range: "2024-05-01/2024-09-30"
+    date_range: "2023-05-01/2023-09-30"
     max_cloud_cover: 20
     target_resolution_m: 10.0
     output_composite: "data/02_processed/sentinel_rede_composite_10m.tif"
 
   training:
+    micro_in_chans: 1
     batch_size: 64
     epochs: 20
     learning_rate: 0.0003

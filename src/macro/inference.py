@@ -142,10 +142,14 @@ def generate_risk_map() -> None:
         else slice(max_lon + pad, min_lon - pad)
     )
 
-    start_date = config["temporal"]["start_date"]
-    end_date = config["temporal"]["end_date"]
+    forecast_year = int(
+        config["temporal"].get("forecast_year", config["temporal"].get("target_year", 2018))
+    )
+    start_date = config["temporal"].get("baseline_start_date", "1995-01-01")
+    end_date = f"{forecast_year - 1}-12-31"
     climate_vars = config.get("climate", {}).get("variables", ["tmax", "tmin", "ppt"])
 
+    logger.info(f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} forecast...")
     ds_sub = (
         ds[climate_vars]
         .sel(
