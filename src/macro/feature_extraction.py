@@ -44,7 +44,7 @@ def _process_dem_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict
                             dy = (win_data[2, 1] - win_data[0, 1]) / (2.0 * cell_size_m)
                             dx = (win_data[1, 2] - win_data[1, 0]) / (2.0 * cell_size_m)
 
-                            slope_rad = np.arctan(np.sqrt(dx ** 2 + dy ** 2))
+                            slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
                             slope_deg = float(np.degrees(slope_rad))
 
                             aspect_rad = np.arctan2(-dy, dx)
@@ -310,7 +310,7 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         tmean = (extracted["tmax"] + extracted["tmin"]) * 0.5
         df["bio1_mean_temp"] = tmean.mean(dim="time").values
         df["bio4_temp_seasonality"] = (
-                tmean.groupby("time.month").mean(dim="time").std(dim="month").values * 100
+            tmean.groupby("time.month").mean(dim="time").std(dim="month").values * 100
         )
 
     if "ppt" in climate_vars:

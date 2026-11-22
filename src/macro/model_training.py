@@ -15,14 +15,14 @@ logger = get_logger(__name__)
 
 
 def evaluate_spatial_cv(
-        df: pd.DataFrame,
-        feature_cols: list,
-        model_params: dict,
-        block_size: int,
-        crs_wgs84: str,
-        crs_projected: str,
-        n_splits: int = 5,
-        label: str = "Model",
+    df: pd.DataFrame,
+    feature_cols: list,
+    model_params: dict,
+    block_size: int,
+    crs_wgs84: str,
+    crs_projected: str,
+    n_splits: int = 5,
+    label: str = "Model",
 ) -> float:
     gdf = gpd.GeoDataFrame(
         df,
