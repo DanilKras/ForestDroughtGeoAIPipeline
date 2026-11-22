@@ -44,7 +44,7 @@ def _process_dem_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict
                             dy = (win_data[2, 1] - win_data[0, 1]) / (2.0 * cell_size_m)
                             dx = (win_data[1, 2] - win_data[1, 0]) / (2.0 * cell_size_m)
 
-                            slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
+                            slope_rad = np.arctan(np.sqrt(dx ** 2 + dy ** 2))
                             slope_deg = float(np.degrees(slope_rad))
 
                             aspect_rad = np.arctan2(-dy, dx)
@@ -253,23 +253,37 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         df_lc = pd.DataFrame(lc_rows).drop_duplicates("obs_id")
         df_new_terrain = df_dem.merge(df_lc, on="obs_id", how="inner")
 
-        df = df.drop(columns=terrain_cols[1:]).merge(df_new_terrain, on="obs_id", how="left")
+        if not df_new_terrain.empty:
+            df_new_idx = df_new_terrain.set_index("obs_id")
+            df_idx = df.set_index("obs_id")
+            for col in terrain_cols[1:]:
+                if col in df_new_idx.columns:
+                    if col not in df_idx.columns:
+                        df_idx[col] = np.nan
+                    df_idx[col] = df_new_idx[col].combine_first(df_idx[col])
+            df = df_idx.reset_index()
+
         df = df.dropna(subset=["elevation", "landcover_class", "slope_deg"])
         df = df[df["elevation"] > 0]
 
         terrain_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        available_ckpt_cols = [c for c in terrain_cols if c in df.columns]
         if terrain_ckpt_path.exists():
             df_old = pd.read_parquet(terrain_ckpt_path)
+            old_cols = [c for c in terrain_cols if c in df_old.columns]
             df_to_cache = pd.concat(
-                [df_old[terrain_cols], df[terrain_cols]], ignore_index=True
+                [df_old[old_cols], df[available_ckpt_cols]], ignore_index=True
             ).drop_duplicates("obs_id")
         else:
-            df_to_cache = df[terrain_cols].drop_duplicates("obs_id")
+            df_to_cache = df[available_ckpt_cols].drop_duplicates("obs_id")
         df_to_cache.to_parquet(terrain_ckpt_path, engine="pyarrow", compression="snappy")
         logger.info(f"Saved terrain checkpoint ({len(df_to_cache)} points): {terrain_ckpt_path}")
     else:
         df = df.dropna(subset=["elevation", "landcover_class", "slope_deg"])
         df = df[df["elevation"] > 0]
+
+    if df.empty:
+        raise ValueError(f"[{year}] No valid terrain/landcover records remaining after filtering.")
 
     logger.info(
         f"[{year}] Streaming TerraClimate baseline ({baseline_start} to {baseline_end}, strictly < {year}-01-01)..."
@@ -296,7 +310,7 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         tmean = (extracted["tmax"] + extracted["tmin"]) * 0.5
         df["bio1_mean_temp"] = tmean.mean(dim="time").values
         df["bio4_temp_seasonality"] = (
-            tmean.groupby("time.month").mean(dim="time").std(dim="month").values * 100
+                tmean.groupby("time.month").mean(dim="time").std(dim="month").values * 100
         )
 
     if "ppt" in climate_vars:
@@ -320,9 +334,12 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
     if missing_soil.any():
         logger.info(f"Batch-sampling ISRIC SoilGrids 2.0 VRT for {missing_soil.sum()} points...")
         df_new_soil = _extract_soilgrids_vrt(df[missing_soil][["obs_id", "lon", "lat"]], env_kwargs)
-        df = df.drop(columns=["soil_ph", "soil_clay_percent"]).merge(
-            df_new_soil, on="obs_id", how="left"
-        )
+        if not df_new_soil.empty:
+            s_new_idx = df_new_soil.set_index("obs_id")
+            df_idx = df.set_index("obs_id")
+            for col in ["soil_ph", "soil_clay_percent"]:
+                df_idx[col] = s_new_idx[col].combine_first(df_idx[col])
+            df = df_idx.reset_index()
 
         soil_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
         if soil_ckpt_path.exists():
@@ -334,12 +351,22 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
             df_soil_save = df[soil_cols].drop_duplicates("obs_id")
         df_soil_save.to_parquet(soil_ckpt_path, engine="pyarrow", compression="snappy")
 
-    required_cols = config["features"]["columns"]
-    df_final = df.dropna(subset=required_cols)
+    primary_cols = config["features"]["columns"]
+
+    df_final = df.dropna(subset=primary_cols)
+    if df_final.empty:
+        raise ValueError(
+            f"[{year}] Feature dataset is empty after dropna on {primary_cols}. "
+            f"Rows before dropna: {len(df)}"
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df_final.to_parquet(output_path, engine="pyarrow", compression="snappy")
 
-    logger.info(f"[{year}] 11 Features saved to: {output_path} (Records: {len(df_final)})")
+    logger.info(
+        f"[{year}] Saved {len(primary_cols)} primary features to: {output_path} "
+        f"(Records: {len(df_final)})"
+    )
     return df_final
 
 

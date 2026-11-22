@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import shap
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
 from utils.config_loader import load_config
@@ -15,14 +15,14 @@ logger = get_logger(__name__)
 
 
 def evaluate_spatial_cv(
-    df: pd.DataFrame,
-    feature_cols: list,
-    model_params: dict,
-    block_size: int,
-    crs_wgs84: str,
-    crs_projected: str,
-    n_splits: int = 5,
-    label: str = "Model",
+        df: pd.DataFrame,
+        feature_cols: list,
+        model_params: dict,
+        block_size: int,
+        crs_wgs84: str,
+        crs_projected: str,
+        n_splits: int = 5,
+        label: str = "Model",
 ) -> float:
     gdf = gpd.GeoDataFrame(
         df,
@@ -35,26 +35,48 @@ def evaluate_spatial_cv(
     gdf["spatial_block_id"] = block_x.astype(str) + "_" + block_y.astype(str)
 
     gkf = GroupKFold(n_splits=n_splits)
-    scores = []
+    roc_scores = []
+    pr_scores = []
 
     for fold, (train_idx, val_idx) in enumerate(gkf.split(gdf, groups=gdf["spatial_block_id"])):
         train_data = gdf.iloc[train_idx]
         val_data = gdf.iloc[val_idx]
 
+        n_val = len(val_data)
+        pos_rate = float(val_data["target"].mean()) if n_val > 0 else 0.0
+        n_blocks_val = val_data["spatial_block_id"].nunique()
+
         if len(val_data["target"].unique()) < 2:
-            logger.warning(f"Fold {fold + 1} contains only a single class. Skipping.")
+            logger.warning(
+                f"[{label}] Fold {fold + 1}: n={n_val}, blocks={n_blocks_val}, "
+                f"pos_rate={pos_rate:.2f} — single class only, skipping AUC."
+            )
             continue
 
         model = xgb.XGBClassifier(**model_params)
         model.fit(train_data[feature_cols], train_data["target"])
 
         preds_proba = model.predict_proba(val_data[feature_cols])[:, 1]
-        auc = roc_auc_score(val_data["target"], preds_proba)
-        scores.append(auc)
+        auc = float(roc_auc_score(val_data["target"], preds_proba))
+        pr_auc = float(average_precision_score(val_data["target"], preds_proba))
 
-    mean_auc = float(pd.Series(scores).mean())
-    std_auc = float(pd.Series(scores).std())
-    logger.info(f"[{label}] Mean Spatial ROC-AUC: {mean_auc:.4f} ± {std_auc:.4f}")
+        roc_scores.append(auc)
+        pr_scores.append(pr_auc)
+
+        logger.info(
+            f"[{label}] Fold {fold + 1}/{n_splits}: n={n_val}, blocks={n_blocks_val}, "
+            f"pos_rate={pos_rate:.2f}, ROC-AUC={auc:.4f}, PR-AUC={pr_auc:.4f}"
+        )
+
+    mean_auc = float(pd.Series(roc_scores).mean())
+    std_auc = float(pd.Series(roc_scores).std())
+    mean_pr = float(pd.Series(pr_scores).mean())
+    std_pr = float(pd.Series(pr_scores).std())
+
+    logger.info(
+        f"[{label}] Summary -> Spatial ROC-AUC: {mean_auc:.4f} ± {std_auc:.4f} | "
+        f"Spatial PR-AUC: {mean_pr:.4f} ± {std_pr:.4f}"
+    )
     return mean_auc
 
 
@@ -62,6 +84,8 @@ def train_spatial_sdm():
     config = load_config()
 
     features = config["features"]["columns"]
+    soil_features = config["features"].get("soil_columns", ["soil_ph", "soil_clay_percent"])
+    features_with_soil = list(dict.fromkeys(features + soil_features))
     static_features = config["features"].get(
         "static_columns",
         [
@@ -70,8 +94,6 @@ def train_spatial_sdm():
             "northness_aspect",
             "twi_moisture_index",
             "landcover_class",
-            "soil_ph",
-            "soil_clay_percent",
         ],
     )
 
@@ -81,6 +103,10 @@ def train_spatial_sdm():
         raise FileNotFoundError(f"Feature dataset not found: {data_path}")
 
     df = pd.read_parquet(data_path)
+    if df.empty:
+        raise ValueError(
+            f"Feature dataset at {data_path} is empty (0 rows). Check feature extraction step."
+        )
     missing_cols = set(features) - set(df.columns)
     if missing_cols:
         raise KeyError(f"Missing expected predictors: {missing_cols}")
@@ -91,7 +117,9 @@ def train_spatial_sdm():
     n_splits = config.get("cv_params", {}).get("n_splits", 5)
     model_params = config["model_params"]
 
-    logger.info(f"1. Model ({primary_year} Target, Climate strictly < {primary_year}-01-01)")
+    logger.info(
+        f"1. Primary Model ({primary_year} Target, Climate < {primary_year}-01-01, no soil proxy)"
+    )
     auc_clean_full = evaluate_spatial_cv(
         df=df,
         feature_cols=features,
@@ -100,10 +128,26 @@ def train_spatial_sdm():
         crs_wgs84=crs_wgs84,
         crs_projected=crs_projected,
         n_splits=n_splits,
-        label=f"{primary_year} Clean Full (11 features)",
+        label=f"{primary_year} Primary Climate+Topo ({len(features)} features)",
     )
 
-    logger.info("2. Ablation Study (Static Terrain/Soil Only, Zero Climate Features)")
+    if set(soil_features).issubset(df.columns):
+        logger.info("2a. Soil Ablation Study (Climate+Topo+Soil)")
+        auc_with_soil = evaluate_spatial_cv(
+            df=df,
+            feature_cols=features_with_soil,
+            model_params=model_params,
+            block_size=block_size,
+            crs_wgs84=crs_wgs84,
+            crs_projected=crs_projected,
+            n_splits=n_splits,
+            label=f"{primary_year} Climate+Topo+Soil ({len(features_with_soil)} features)",
+        )
+        logger.info(
+            f"Soil Delta (Climate+Topo+Soil vs Climate+Topo): {auc_with_soil - auc_clean_full:+.4f}"
+        )
+
+    logger.info("2b. Static Terrain/LandCover Ablation (Zero Climate Features)")
     auc_static_only = evaluate_spatial_cv(
         df=df,
         feature_cols=static_features,
@@ -112,10 +156,10 @@ def train_spatial_sdm():
         crs_wgs84=crs_wgs84,
         crs_projected=crs_projected,
         n_splits=n_splits,
-        label=f"{primary_year} Static-Only Ablation (7 features)",
+        label=f"{primary_year} Static-Only Ablation ({len(static_features)} features)",
     )
     logger.info(
-        f"Ablation Delta (Static-Only vs Clean Full): {auc_static_only - auc_clean_full:+.4f}"
+        f"Static Delta (Static-Only vs Primary Climate+Topo): {auc_static_only - auc_clean_full:+.4f}"
     )
 
     final_model = xgb.XGBClassifier(**model_params)
@@ -143,7 +187,7 @@ def train_spatial_sdm():
                 crs_wgs84=crs_wgs84,
                 crs_projected=crs_projected,
                 n_splits=n_splits,
-                label=f"{val_year} Spatial CV (11 features)",
+                label=f"{val_year} Spatial CV (9 features)",
             )
 
             oot_preds = final_model.predict_proba(df_val[features])[:, 1]

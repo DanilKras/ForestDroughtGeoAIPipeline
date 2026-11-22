@@ -62,9 +62,9 @@ class ExtractedFeatures(BaseModel):
     bio15_precip_seas: float = Field(
         ..., description="Precipitation Seasonality coefficient (BIO15)", examples=[24.8]
     )
-    soil_ph: float = Field(..., description="ISRIC SoilGrids 0-5cm pH in H2O", examples=[4.9])
-    soil_clay_percent: float = Field(
-        ..., description="ISRIC SoilGrids 0-5cm Clay content (%)", examples=[21.5]
+    soil_ph: Optional[float] = Field(default=None, description="ISRIC SoilGrids 0-5cm pH in H2O")
+    soil_clay_percent: Optional[float] = Field(
+        default=None, description="ISRIC SoilGrids 0-5cm Clay content (%)"
     )
 
 

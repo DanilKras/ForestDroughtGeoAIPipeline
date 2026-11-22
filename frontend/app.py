@@ -24,11 +24,11 @@ from streamlit_folium import st_folium
 from utils.config_loader import load_config
 
 config = load_config()
-REGION_NAME = config["project"].get("region_name", "Study Ecosystem")
-RISK_MAP_PATH = config["paths"].get(
+REGION_NAME = config.get("project", {}).get("region_name", "Study Ecosystem")
+RISK_MAP_PATH = config.get("paths", {}).get(
     "risk_map_tif", "data/03_results/maps/regional_vulnerability_map.tif"
 )
-BBOX = config["spatial"]["bbox"]
+BBOX = config.get("spatial", {}).get("bbox", [16.45, 47.55, 16.70, 47.75])
 BBOX_CONFIG = {
     "min_lon": BBOX[0],
     "min_lat": BBOX[1],
@@ -64,25 +64,25 @@ st.markdown(
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        div[data-testid="stMetricValue"] { 
-            font-size: 1.3rem !important; 
-            font-weight: 700 !important; 
-            color: #f8fafc !important; 
+        div[data-testid="stMetricValue"] {
+            font-size: 1.3rem !important;
+            font-weight: 700 !important;
+            color: #f8fafc !important;
         }
-        div[data-testid="stMetricLabel"] { 
-            font-size: 0.75rem !important; 
-            font-weight: 500 !important; 
-            color: #94a3b8 !important; 
-            text-transform: uppercase; 
-            letter-spacing: 0.5px; 
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.75rem !important;
+            font-weight: 500 !important;
+            color: #94a3b8 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .risk-banner {
-            padding: 14px 16px; 
-            border-radius: 6px; 
+            padding: 14px 16px;
+            border-radius: 6px;
             font-weight: 600;
             font-size: 1.1rem;
-            text-align: center; 
+            text-align: center;
             margin: 8px 0 16px 0;
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
             letter-spacing: 0.3px;
@@ -106,7 +106,9 @@ BACKEND_HOST = os.getenv("BACKEND_HOST", "http://localhost:8000")
 PREDICT_URL_LOCAL = f"{BACKEND_HOST}/predict/local"
 PREDICT_URL_CLOUD = f"{BACKEND_HOST}/predict/cloud"
 
-BOUNDARY_PATH = "data/00_external/focal_forest_boundary.geojson"
+BOUNDARY_PATH = config.get("paths", {}).get(
+    "boundary_geojson", "data/00_external/focal_forest_boundary.geojson"
+)
 
 if "map_center" not in st.session_state:
     st.session_state.map_center = DEFAULT_CENTER
@@ -223,8 +225,6 @@ def plot_shap_bar(shap_dict: dict):
         "northness_aspect": "Aspect (Northness)",
         "twi_moisture_index": "Moisture (TWI)",
         "landcover_class": "Land Cover",
-        "soil_ph": "Soil pH",
-        "soil_clay_percent": "Soil Clay (%)",
     }
     df = pd.DataFrame(
         [{"Feature": friendly_names.get(k, k), "SHAP Value": v} for k, v in shap_dict.items()]
@@ -263,7 +263,7 @@ def plot_shap_bar(shap_dict: dict):
 
 st.title("Forest GeoAI: Drought Vulnerability")
 st.caption(
-    "Cloud-Native Multi-Scale Geospatial Inference (Copernicus DEM, WorldCover, TerraClimate Zarr, SoilGrids)."
+    "Cloud-Native Multi-Scale Geospatial Inference (Copernicus DEM, WorldCover, TerraClimate Zarr)."
 )
 
 raw_geojson, prepared_boundary, boundary_bounds = load_spatial_boundary(BOUNDARY_PATH)
@@ -281,8 +281,8 @@ with top_col2:
         "Backend Routing:",
         options=[f"Local Precomputed ({REGION_NAME})", "Cloud Streaming (Global STAC/Zarr)"],
         captions=[
-            "Latency: <5ms. Uses local 11-band GeoTIFF stack.",
-            "Latency: ~15-30s. On-demand global planetary assets.",
+            "Latency: <5ms. Uses local 9-band GeoTIFF stack.",
+            "Latency: ~10-30s (cached per point). On-demand STAC/Zarr.",
         ],
         index=0,
     )
@@ -301,9 +301,9 @@ with top_col2:
     else:
         if st.button("Run Spatial Inference", type="primary", use_container_width=True):
             target_endpoint = PREDICT_URL_LOCAL if is_local_mode else PREDICT_URL_CLOUD
-            call_timeout = 10 if is_local_mode else 120
+            call_timeout = 15 if is_local_mode else 300
             loading_msg = (
-                "Sampling local 11-band raster stack..."
+                "Sampling local 9-band raster stack..."
                 if is_local_mode
                 else "Streaming STAC DEM, WorldCover & Zarr climate..."
             )
@@ -342,6 +342,10 @@ with top_col2:
                                 for p in st.session_state.prediction_history
                             ):
                                 st.session_state.prediction_history.append(new_entry)
+                except requests.exceptions.Timeout:
+                    st.warning(
+                        "Cloud streaming timed out (>55s). Try again or inspect a point within the focal region."
+                    )
                 except requests.exceptions.RequestException as e:
                     st.error(f"Backend API error: {e}")
 
@@ -496,7 +500,7 @@ if st.session_state.inference_results:
             st.info("Attribution unavailable for non-forest locations.")
 
     with b_col3:
-        st.markdown("### Predictors (11 Variables)")
+        st.markdown("### Predictors (9 Variables)")
         feats = res.get("extracted_features")
         if is_forest and feats:
             c1, c2, c3 = st.columns(3)
@@ -507,16 +511,14 @@ if st.session_state.inference_results:
                 st.metric("Northness", f"{feats.get('northness_aspect', 0):.2f}")
                 st.metric("TWI", f"{feats.get('twi_moisture_index', 0):.1f}")
             with c2:
-                st.caption("Climate (30y)")
+                st.caption("Climate (Baseline)")
                 st.metric("Mean Temp", f"{feats.get('bio1_temp_c', 0):.1f} °C")
                 st.metric("Temp Seas.", f"{feats.get('bio4_seasonality', 0):.0f}")
                 st.metric("Ann. Precip", f"{feats.get('bio12_precip_mm', 0):.0f} mm")
                 st.metric("Precip Seas.", f"{feats.get('bio15_precip_seas', 0):.1f}")
             with c3:
-                st.caption("Soil & Cover")
+                st.caption("Land Cover")
                 st.metric("Land Cover", "Forest" if feats.get("landcover_class") == 10 else "Other")
-                st.metric("Soil pH", f"{feats.get('soil_ph', 0):.2f}")
-                st.metric("Clay Content", f"{feats.get('soil_clay_percent', 0):.1f} %")
         else:
             st.caption("No biological predictors extracted.")
 

@@ -1,3 +1,4 @@
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -21,6 +22,59 @@ logger = get_logger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _open_terraclimate_zarr(catalog) -> xr.Dataset:
+    collection_clim = catalog.get_collection("terraclimate")
+    zarr_url = collection_clim.assets["zarr-https"].href
+    signed_url = planetary_computer.sign(zarr_url)
+
+    parsed_url = urllib.parse.urlsplit(signed_url)
+    base_url = urllib.parse.urlunsplit(
+        (parsed_url.scheme, parsed_url.netloc, parsed_url.path, "", "")
+    )
+    sas_dict = dict(urllib.parse.parse_qsl(parsed_url.query))
+
+    store = fsspec.get_mapper(base_url, params=sas_dict)
+    return xr.open_zarr(store, consolidated=True)
+
+
+def _fetch_terraclimate_subset(
+    catalog,
+    climate_vars: list[str],
+    start_date: str,
+    end_date: str,
+    lat_slice: slice,
+    lon_slice: slice,
+    max_retries: int = 4,
+) -> xr.Dataset:
+    start_year = int(start_date[:4])
+    end_year = int(end_date[:4])
+    yearly_chunks = []
+
+    for yr in range(start_year, end_year + 1):
+        yr_start = f"{yr}-01-01" if yr > start_year else start_date
+        yr_end = f"{yr}-12-31" if yr < end_year else end_date
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                ds_curr = _open_terraclimate_zarr(catalog)
+                chunk = (
+                    ds_curr[climate_vars]
+                    .sel(time=slice(yr_start, yr_end), lat=lat_slice, lon=lon_slice)
+                    .compute()
+                )
+                yearly_chunks.append(chunk)
+                break
+            except Exception as exc:
+                logger.warning(
+                    f"TerraClimate Zarr read failed for {yr} (attempt {attempt}/{max_retries}): {exc}"
+                )
+                if attempt == max_retries:
+                    raise
+                time.sleep(2.0 * attempt)
+
+    return xr.concat(yearly_chunks, dim="time").sortby("time")
 
 
 def generate_risk_map() -> None:
@@ -117,28 +171,17 @@ def generate_risk_map() -> None:
         raise ValueError("No forest pixels found within the selected bounding box.")
 
     logger.info("Querying TerraClimate Zarr multidimensional array...")
-    collection_clim = catalog.get_collection("terraclimate")
-    zarr_url = collection_clim.assets["zarr-https"].href
-    signed_url = planetary_computer.sign(zarr_url)
-
-    parsed_url = urllib.parse.urlsplit(signed_url)
-    base_url = urllib.parse.urlunsplit(
-        (parsed_url.scheme, parsed_url.netloc, parsed_url.path, "", "")
-    )
-    sas_dict = dict(urllib.parse.parse_qsl(parsed_url.query))
-
-    store = fsspec.get_mapper(base_url, params=sas_dict)
-    ds = xr.open_zarr(store, consolidated=True)
+    ds_ref = _open_terraclimate_zarr(catalog)
 
     pad = 0.15
     lat_slice = (
         slice(max_lat + pad, min_lat - pad)
-        if ds.lat[0] > ds.lat[-1]
+        if ds_ref.lat[0] > ds_ref.lat[-1]
         else slice(min_lat - pad, max_lat + pad)
     )
     lon_slice = (
         slice(min_lon - pad, max_lon + pad)
-        if ds.lon[0] < ds.lon[-1]
+        if ds_ref.lon[0] < ds_ref.lon[-1]
         else slice(max_lon + pad, min_lon - pad)
     )
 
@@ -152,14 +195,13 @@ def generate_risk_map() -> None:
     logger.info(
         f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} forecast..."
     )
-    ds_sub = (
-        ds[climate_vars]
-        .sel(
-            time=slice(start_date, end_date),
-            lat=lat_slice,
-            lon=lon_slice,
-        )
-        .compute()
+    ds_sub = _fetch_terraclimate_subset(
+        catalog=catalog,
+        climate_vars=climate_vars,
+        start_date=start_date,
+        end_date=end_date,
+        lat_slice=lat_slice,
+        lon_slice=lon_slice,
     )
 
     tmean_coarse = (ds_sub["tmax"] + ds_sub["tmin"]) * 0.5
@@ -182,9 +224,6 @@ def generate_risk_map() -> None:
 
     bio_grid = bio_ds.interp(lat=grid_lats, lon=grid_lons, method="linear")
 
-    soil_ph_matrix = np.full(dem_shape, 4.90, dtype=np.float32)
-    soil_clay_matrix = np.full(dem_shape, 21.5, dtype=np.float32)
-
     features_dict = {
         "elevation": elevation_matrix[valid_mask],
         "slope_deg": slope_matrix[valid_mask],
@@ -195,8 +234,6 @@ def generate_risk_map() -> None:
         "bio4_temp_seasonality": bio_grid["bio4"].values[valid_mask],
         "bio12_annual_precip": bio_grid["bio12"].values[valid_mask],
         "bio15_precip_seasonality": bio_grid["bio15"].values[valid_mask],
-        "soil_ph": soil_ph_matrix[valid_mask],
-        "soil_clay_percent": soil_clay_matrix[valid_mask],
     }
 
     X_valid = pd.DataFrame(features_dict)[feature_columns]
@@ -241,8 +278,6 @@ def generate_risk_map() -> None:
         "bio4_temp_seasonality": bio_grid["bio4"].values.astype(np.float32),
         "bio12_annual_precip": bio_grid["bio12"].values.astype(np.float32),
         "bio15_precip_seasonality": bio_grid["bio15"].values.astype(np.float32),
-        "soil_ph": soil_ph_matrix,
-        "soil_clay_percent": soil_clay_matrix,
     }
 
     feature_arrays = [feature_arrays_map[col] for col in feature_columns]
@@ -268,7 +303,7 @@ def generate_risk_map() -> None:
             dst.write(layer, idx)
             dst.set_band_description(idx, col_name)
 
-    logger.info(f"11-band predictor stack written to: {feature_stack_tif}")
+    logger.info(f"{len(feature_columns)}-band predictor stack written to: {feature_stack_tif}")
 
 
 if __name__ == "__main__":

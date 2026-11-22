@@ -21,25 +21,26 @@ paths:
 
 features:
   columns:
-    - "elevation"
-    - "slope_deg"
-    - "northness_aspect"
-    - "twi_moisture_index"
-    - "landcover_class"
-    - "bio1_mean_temp"
-    - "bio4_temp_seasonality"
-    - "bio12_annual_precip"
-    - "bio15_precip_seasonality"
-    - "soil_ph"
-    - "soil_clay_percent"
+    - elevation
+    - slope_deg
+    - northness_aspect
+    - twi_moisture_index
+    - landcover_class
+    - bio1_mean_temp
+    - bio4_temp_seasonality
+    - bio12_annual_precip
+    - bio15_precip_seasonality
+
+  soil_columns:
+    - soil_ph
+    - soil_clay_percent
+
   static_columns:
-    - "elevation"
-    - "slope_deg"
-    - "northness_aspect"
-    - "twi_moisture_index"
-    - "landcover_class"
-    - "soil_ph"
-    - "soil_clay_percent"
+    - elevation
+    - slope_deg
+    - northness_aspect
+    - twi_moisture_index
+    - landcover_class
 
 spatial:
   bbox: [16.45, 47.55, 16.70, 47.75]
@@ -86,25 +87,22 @@ pseudo_absences:
 
 micro:
   paths:
-    raw_micro_dir: "micro_soe"
-    points_shp: "data/micro_soe/soe_rede_CrownPoints.shp"
     forest_units_shp: "data/micro_soe/ForestUnits.shp"
-    ddm_tif: "data/micro_soe/lidar/DDM_1m_EOV.tif"
-    dfm_tif: "data/micro_soe/lidar/DFM_1m_EOV.tif"
-    ortho_tif: "data/micro_soe/lidar/ortofoto_20cm_EOV.tif"
-    chm_tif: "data/02_processed/CHM_1m_EOV.tif"
-    annotated_crowns_gpkg: "data/02_processed/annotated_crowns.gpkg"
+    s2_drought_tif: "data/02_processed/sentinel2_rede_2022_drought_10m.tif"
+    s2_baseline_tif: "data/02_processed/sentinel2_rede_2023_baseline_10m.tif"
+    output_gpkg: "data/03_results/rede_sentinel2_drought_stress.gpkg"
+    output_plot: "data/03_results/figures/rede_species_drought_response.png"
 
   sentinel:
     collection_s2: "sentinel-2-l2a"
-    collection_s1: "sentinel-1-rtc"
-    date_range: "2023-05-01/2023-09-30"
-    max_cloud_cover: 20
+    drought_date_range: "2022-07-01/2022-08-31"
+    baseline_date_range: "2023-07-01/2023-08-31"
+    max_cloud_cover: 15
     target_resolution_m: 10.0
-    output_composite: "data/02_processed/sentinel_rede_composite_10m.tif"
 
   training:
-    micro_in_chans: 1
+    micro_in_chans: 4
+    meso_in_chans: 4
     batch_size: 64
     epochs: 20
     learning_rate: 0.0003
