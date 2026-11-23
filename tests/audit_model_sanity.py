@@ -7,14 +7,16 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.macro.model_training import evaluate_spatial_cv
 from utils.categorical import load_categorical_schema, prepare_categorical_features
 from utils.config_loader import load_config
 from utils.logger import get_logger
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
 
 logger = get_logger(__name__)
 
