@@ -10,19 +10,24 @@ from shapely.prepared import prep
 
 from utils.config_loader import load_config
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 try:
     _config = load_config()
     MIN_LON, MIN_LAT, MAX_LON, MAX_LAT = _config["spatial"]["bbox"]
+    _boundary_rel = _config.get("paths", {}).get(
+        "boundary_geojson", "data/00_external/sopron_forest_boundary.geojson"
+    )
 except Exception:
     MIN_LON, MIN_LAT, MAX_LON, MAX_LAT = 16.45, 47.55, 16.70, 47.75
+    _boundary_rel = "data/00_external/sopron_forest_boundary.geojson"
 
-BOUNDARY_GEOJSON_PATH = Path("data/00_external/sopron_forest_boundary.geojson")
+BOUNDARY_GEOJSON_PATH = PROJECT_ROOT / _boundary_rel
 _PREPARED_BOUNDARY = None
 
 if BOUNDARY_GEOJSON_PATH.exists():
     try:
-        with open(BOUNDARY_GEOJSON_PATH, "r", encoding="utf-8") as f:
-            _geojson_data = json.load(f)
+        _geojson_data = json.loads(BOUNDARY_GEOJSON_PATH.read_text(encoding="utf-8"))
         _geoms = [shape(feature["geometry"]) for feature in _geojson_data["features"]]
         _PREPARED_BOUNDARY = prep(unary_union(_geoms))
     except Exception:
@@ -47,8 +52,10 @@ class ExtractedFeatures(BaseModel):
     twi_moisture_index: float = Field(
         ..., description="Topographic Wetness Index (TWI)", examples=[6.8]
     )
-    landcover_class: int = Field(
-        ..., description="ESA WorldCover class code (10 = Tree cover)", examples=[10]
+    landcover_class: Optional[int] = Field(
+        default=10,
+        description="ESA WorldCover forest mask code (10 = Tree cover; masking only)",
+        examples=[10],
     )
     bio1_temp_c: float = Field(
         ..., description="Annual Mean Temperature in Celsius (BIO1)", examples=[9.82]
@@ -109,12 +116,12 @@ class InferenceResponse(BaseModel):
         ...,
         ge=0.0,
         le=1.0,
-        description="Canopy drought vulnerability probability (Picea abies)",
+        description="Macro-scale climatic drought exposure / hazard probability (Picea abies range)",
         examples=[0.742],
     )
     risk_level: RiskLevel = Field(
         ...,
-        description="Categorical risk tier based on calibrated thresholds",
+        description="Categorical drought exposure tier based on calibrated thresholds",
         examples=[RiskLevel.HIGH],
     )
     is_forest: bool = Field(
@@ -124,12 +131,12 @@ class InferenceResponse(BaseModel):
     )
     extracted_features: Optional[ExtractedFeatures] = Field(
         default=None,
-        description="Extracted 11-variable environmental profile (None if point is outside forest)",
+        description="Extracted 8-predictor environmental profile plus forest mask metadata",
     )
     shap_values: Dict[str, float] = Field(
         default_factory=dict,
-        description="Local SHAP attributions (log-odds impact) for each feature",
-        examples=[{"twi_moisture_index": 0.35, "soil_ph": -0.18}],
+        description="Local SHAP attributions (log-odds impact) for each exposure predictor",
+        examples=[{"twi_moisture_index": 0.35, "bio1_mean_temp": 0.42}],
     )
 
 

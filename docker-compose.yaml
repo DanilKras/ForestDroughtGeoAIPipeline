@@ -4,7 +4,7 @@ x-airflow-common: &airflow-common
     - AIRFLOW__CORE__EXECUTOR=LocalExecutor
     - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
     - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqnvq8=
-    - AIRFLOW__WEBSERVER__SECRET_KEY=armillaria_geoai_super_secret_key_12345
+    - AIRFLOW__WEBSERVER__SECRET_KEY=geoai_super_secret_key_12345
     - AIRFLOW__CORE__LOAD_EXAMPLES=False
     - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
     - PYTHONPATH=/opt/airflow

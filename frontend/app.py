@@ -1,8 +1,9 @@
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import folium
 import geopandas as gpd
@@ -18,15 +19,17 @@ from matplotlib import pyplot as plt
 from rasterio.enums import Resampling
 from shapely.geometry import shape
 from shapely.ops import unary_union
-from shapely.prepared import prep
+from shapely.prepared import PreparedGeometry, prep
 from streamlit_folium import st_folium
 
 from utils.config_loader import load_config
 
 config = load_config()
 REGION_NAME = config.get("project", {}).get("region_name", "Study Ecosystem")
-RISK_MAP_PATH = config.get("paths", {}).get(
-    "risk_map_tif", "data/03_results/maps/regional_vulnerability_map.tif"
+RISK_MAP_PATH = Path(
+    config.get("paths", {}).get(
+        "risk_map_tif", "data/03_results/maps/regional_vulnerability_map.tif"
+    )
 )
 BBOX = config.get("spatial", {}).get("bbox", [16.45, 47.55, 16.70, 47.75])
 BBOX_CONFIG = {
@@ -106,8 +109,10 @@ BACKEND_HOST = os.getenv("BACKEND_HOST", "http://localhost:8000")
 PREDICT_URL_LOCAL = f"{BACKEND_HOST}/predict/local"
 PREDICT_URL_CLOUD = f"{BACKEND_HOST}/predict/cloud"
 
-BOUNDARY_PATH = config.get("paths", {}).get(
-    "boundary_geojson", "data/00_external/focal_forest_boundary.geojson"
+BOUNDARY_PATH = Path(
+    config.get("paths", {}).get(
+        "boundary_geojson", "data/00_external/sopron_forest_boundary.geojson"
+    )
 )
 
 if "map_center" not in st.session_state:
@@ -127,11 +132,12 @@ if "map_bounds_fitted" not in st.session_state:
 
 
 @st.cache_resource(show_spinner=False)
-def load_spatial_boundary(geojson_path: str):
-    if not os.path.exists(geojson_path):
+def load_spatial_boundary(
+    geojson_path: Path,
+) -> tuple[dict[str, Any] | None, PreparedGeometry | None, list[list[float]] | None]:
+    if not geojson_path.exists():
         return None, None, None
-    with open(geojson_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = json.loads(geojson_path.read_text(encoding="utf-8"))
     raw_geom = unary_union([shape(f["geometry"]) for f in data["features"]])
     prepared = prep(raw_geom)
     min_lon, min_lat, max_lon, max_lat = raw_geom.bounds
@@ -140,8 +146,10 @@ def load_spatial_boundary(geojson_path: str):
 
 
 @st.cache_data(show_spinner=False)
-def get_risk_raster_overlay(tif_path: str):
-    if not os.path.exists(tif_path):
+def get_risk_raster_overlay(
+    tif_path: Path,
+) -> tuple[np.ndarray | None, list[list[float]] | None]:
+    if not tif_path.exists():
         return None, None
     try:
         with rasterio.open(tif_path) as src:
@@ -166,7 +174,7 @@ def get_risk_raster_overlay(tif_path: str):
         return None, None
 
 
-def export_history_to_gpkg(history_records: list) -> bytes:
+def export_history_to_gpkg(history_records: list[dict[str, Any]]) -> bytes:
     df = pd.DataFrame(history_records)
     gdf = gpd.GeoDataFrame(
         df,
@@ -176,11 +184,10 @@ def export_history_to_gpkg(history_records: list) -> bytes:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_file = Path(tmp_dir) / "forest_inspections.gpkg"
         gdf.to_file(tmp_file, layer="canopy_vulnerability_inspections", driver="GPKG")
-        with open(tmp_file, "rb") as f:
-            return f.read()
+        return tmp_file.read_bytes()
 
 
-def plot_risk_gauge(probability: float):
+def plot_risk_gauge(probability: float) -> go.Figure:
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
@@ -212,7 +219,7 @@ def plot_risk_gauge(probability: float):
     return fig
 
 
-def plot_shap_bar(shap_dict: dict):
+def plot_shap_bar(shap_dict: dict[str, float]) -> go.Figure | None:
     if not shap_dict:
         return None
     friendly_names = {
@@ -281,7 +288,7 @@ with top_col2:
         "Backend Routing:",
         options=[f"Local Precomputed ({REGION_NAME})", "Cloud Streaming (Global STAC/Zarr)"],
         captions=[
-            "Latency: <5ms. Uses local 9-band GeoTIFF stack.",
+            "Latency: <5ms. Uses local 8-band GeoTIFF exposure stack.",
             "Latency: ~10-30s (cached per point). On-demand STAC/Zarr.",
         ],
         index=0,
@@ -303,9 +310,9 @@ with top_col2:
             target_endpoint = PREDICT_URL_LOCAL if is_local_mode else PREDICT_URL_CLOUD
             call_timeout = 15 if is_local_mode else 300
             loading_msg = (
-                "Sampling local 9-band raster stack..."
+                "Sampling local 8-band exposure raster stack..."
                 if is_local_mode
-                else "Streaming STAC DEM, WorldCover & Zarr climate..."
+                else "Streaming STAC DEM, WorldCover mask & Zarr climate..."
             )
 
             with st.spinner(loading_msg):
@@ -328,7 +335,9 @@ with top_col2:
                         if res.get("is_forest", False):
                             feats = res.get("extracted_features") or {}
                             new_entry = {
-                                "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                "timestamp": datetime.now(timezone.utc).strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                ),
                                 "lat": st.session_state.target_lat,
                                 "lon": st.session_state.target_lon,
                                 "risk_probability": res["risk_probability"],
@@ -380,7 +389,7 @@ with top_col1:
             image=risk_img,
             bounds=r_bounds,
             opacity=0.65,
-            name="Vulnerability Layer",
+            name="Exposure Layer",
             overlay=True,
             interactive=False,
         ).add_to(m)
@@ -412,7 +421,7 @@ with top_col1:
             fill=True,
             fill_color=color,
             fill_opacity=0.85,
-            tooltip=f"Vulnerability: {p_val * 100:.1f}%",
+            tooltip=f"Exposure: {p_val * 100:.1f}%",
         ).add_to(m)
 
     folium.Marker(
@@ -458,7 +467,7 @@ if st.session_state.inference_results:
     b_col1, b_col2, b_col3 = st.columns([1.0, 1.8, 1.6], gap="medium")
 
     with b_col1:
-        st.markdown("### Canopy Vulnerability")
+        st.markdown("### Drought Exposure")
         if not is_forest:
             st.markdown(
                 '<div class="risk-banner risk-nodata">Non-Forest / Excluded Area</div>',
@@ -473,17 +482,17 @@ if st.session_state.inference_results:
             )
             if prob >= 0.66:
                 st.markdown(
-                    '<div class="risk-banner risk-high">High Vulnerability Stand</div>',
+                    '<div class="risk-banner risk-high">High Exposure Zone</div>',
                     unsafe_allow_html=True,
                 )
             elif prob >= 0.33:
                 st.markdown(
-                    '<div class="risk-banner risk-medium">Moderate Stress Zone</div>',
+                    '<div class="risk-banner risk-medium">Moderate Exposure Zone</div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    '<div class="risk-banner risk-low">Resilient Canopy Stand</div>',
+                    '<div class="risk-banner risk-low">Moisture-Buffered Stand</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -500,7 +509,7 @@ if st.session_state.inference_results:
             st.info("Attribution unavailable for non-forest locations.")
 
     with b_col3:
-        st.markdown("### Predictors (9 Variables)")
+        st.markdown("### Predictors (8 Climate+Topo)")
         feats = res.get("extracted_features")
         if is_forest and feats:
             c1, c2, c3 = st.columns(3)
@@ -517,8 +526,8 @@ if st.session_state.inference_results:
                 st.metric("Ann. Precip", f"{feats.get('bio12_precip_mm', 0):.0f} mm")
                 st.metric("Precip Seas.", f"{feats.get('bio15_precip_seas', 0):.1f}")
             with c3:
-                st.caption("Land Cover")
-                st.metric("Land Cover", "Forest" if feats.get("landcover_class") == 10 else "Other")
+                st.caption("Forest Mask")
+                st.metric("Mask", "Forest" if feats.get("landcover_class", 10) == 10 else "Other")
         else:
             st.caption("No biological predictors extracted.")
 

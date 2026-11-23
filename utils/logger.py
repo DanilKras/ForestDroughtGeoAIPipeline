@@ -4,12 +4,8 @@ import sys
 
 
 def get_logger(name: str = __name__, level: int = logging.INFO) -> logging.Logger:
-    """
-    Initialize and return a logger with the specified name and level. If the logger already has handlers, it will not add new ones.
-    """
     logger = logging.getLogger(name)
     logger.setLevel(level)
-
     logger.propagate = True
 
     is_airflow = os.environ.get("AIRFLOW_CTX_DAG_ID") is not None

@@ -42,29 +42,29 @@ default_args = {
         "planetary-computer",
     ],
 )
-def forest_drought_vulnerability_dag():
+def forest_drought_vulnerability_dag() -> None:
     @task(task_id="ingest_forest_inventory_data")
-    def task_extract():
+    def task_extract() -> None:
         extract_all_raw_data()
 
     @task(task_id="spatial_rarefaction_1km")
-    def task_thinning():
+    def task_thinning() -> None:
         process_and_thin_data()
 
     @task(task_id="stratify_drought_resilience_labels")
-    def task_sampling():
+    def task_sampling() -> None:
         extract_drought_resilience_labels()
 
     @task(task_id="cloud_feature_engineering", execution_timeout=timedelta(hours=1))
-    def task_features():
+    def task_features() -> None:
         run_advanced_feature_extraction()
 
     @task(task_id="train_spatial_xgboost")
-    def task_train():
+    def task_train() -> None:
         train_spatial_sdm()
 
     @task(task_id="generate_spatial_vulnerability_map")
-    def task_infer():
+    def task_infer() -> None:
         generate_risk_map()
 
     t1 = task_extract()

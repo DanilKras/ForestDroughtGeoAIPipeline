@@ -1,6 +1,8 @@
 project:
   name: "Forest_Drought_Vulnerability_GeoAI"
   target_phenomenon: "Canopy_Dieback_and_Drought_Vulnerability"
+  macro_phenomenon: "Climatic_Drought_Exposure_Hazard"
+  micro_phenomenon: "Canopy_Crown_Dieback_and_Moisture_Stress"
   region_name: "Sopron_Fertő_Ecosystem"
   macro_target_column: "target"
 
@@ -14,10 +16,15 @@ paths:
   features_advanced: "data/02_processed/features_advanced.parquet"
 
   model_weights: "models/forest_vulnerability_xgb.json"
+  macro_oof_predictions: "data/02_processed/macro_oof_predictions.parquet"
+  macro_model_comparison: "data/03_results/macro_baseline_comparison.json"
+  macro_temporal_transfer: "data/03_results/macro_temporal_transfer.json"
+  macro_categorical_schema: "data/02_processed/macro_categorical_schema.json"
   risk_map_tif: "data/03_results/maps/regional_vulnerability_map.tif"
   feature_stack_tif: "data/03_results/maps/regional_features_stack.tif"
   shap_summary_plot: "data/03_results/figures/spatial_shap_summary.png"
   eda_distribution_plot: "data/03_results/figures/clean_presence_distribution.png"
+  boundary_geojson: "data/00_external/sopron_forest_boundary.geojson"
 
 features:
   columns:
@@ -25,11 +32,21 @@ features:
     - slope_deg
     - northness_aspect
     - twi_moisture_index
-    - landcover_class
     - bio1_mean_temp
     - bio4_temp_seasonality
     - bio12_annual_precip
     - bio15_precip_seasonality
+
+  categorical_columns: []
+
+  forest_mask_column: "landcover_class"
+  forest_mask_value: 10
+  post_event_landcover_ablation:
+    - landcover_class
+  ablation_categorical_columns:
+    - landcover_class
+
+  landcover_categories: [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
 
   soil_columns:
     - soil_ph
@@ -40,13 +57,16 @@ features:
     - slope_deg
     - northness_aspect
     - twi_moisture_index
-    - landcover_class
 
 spatial:
   bbox: [16.45, 47.55, 16.70, 47.75]
+  study_sites:
+    sopron_bbox: [16.45, 47.55, 16.70, 47.75]
+    rede_bbox: [17.90, 47.37, 18.01, 47.44]
   crs_wgs84: "EPSG:4326"
   crs_projected: "EPSG:3035"
   block_size_meters: 150000
+  guard_buffer_meters: 15000
 
 cv_params:
   n_splits: 5
@@ -60,6 +80,7 @@ model_params:
   reg_lambda: 3.0
   random_state: 42
   eval_metric: "auc"
+  enable_categorical: true
 
 temporal:
   baseline_start_date: "1995-01-01"
@@ -86,12 +107,24 @@ pseudo_absences:
   max_extent_buffer_m: 200000
 
 micro:
+  crs: "EPSG:23700"
   paths:
     forest_units_shp: "data/micro_soe/ForestUnits.shp"
+    crown_polygons_shp: "data/micro_soe/soe_rede_CrownPolygons.shp"
+    annotated_crowns_gpkg: "data/02_processed/annotated_crowns.gpkg"
+    species_mapping_json: "data/02_processed/micro_species_mapping.json"
+    norm_stats_json: "data/02_processed/micro_norm_stats.json"
+    ortho_tif: "data/micro_soe/lidar/ortofoto_20cm_EOV.tif"
+    chm_tif: "data/micro_soe/lidar/CHM_1m_EOV.tif"
+    drm_tif: "data/micro_soe/lidar/DRM_1m_EOV.tif"
     s2_drought_tif: "data/02_processed/sentinel2_rede_2022_drought_10m.tif"
     s2_baseline_tif: "data/02_processed/sentinel2_rede_2023_baseline_10m.tif"
     output_gpkg: "data/03_results/rede_sentinel2_drought_stress.gpkg"
+    output_predictions_gpkg: "data/03_results/rede_stress_predictions.gpkg"
     output_plot: "data/03_results/figures/rede_species_drought_response.png"
+    modality_ablations_json: "data/03_results/micro_modality_ablations.json"
+    multiscale_stand_gpkg: "data/03_results/rede_multiscale_stand_vulnerability.gpkg"
+    multiscale_summary_json: "data/03_results/multiscale_coupling_summary.json"
 
   sentinel:
     collection_s2: "sentinel-2-l2a"
@@ -99,10 +132,14 @@ micro:
     baseline_date_range: "2023-07-01/2023-08-31"
     max_cloud_cover: 15
     target_resolution_m: 10.0
+    output_composite: "data/02_processed/sentinel_rede_composite_10m.tif"
+    s2_l2a_baseline_04_offset: 1000.0
 
   training:
     micro_in_chans: 4
-    meso_in_chans: 4
+    meso_in_chans: 6
+    modality_mode: "fusion"
+    target_mode: "allometry_zscore"
     batch_size: 64
     epochs: 20
     learning_rate: 0.0003
@@ -114,3 +151,4 @@ micro:
     micro_size_px: 32
     meso_size_px: 5
     meso_window_m: 50.0
+    guard_buffer_m: 60.0

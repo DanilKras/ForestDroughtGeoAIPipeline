@@ -19,10 +19,7 @@ def parse_downloaded_eu_forest(
     target_species: str = "Picea abies",
     max_records: Optional[int] = 80000,
 ) -> pd.DataFrame:
-    """
-    Parses the JRC EU-Forest dataset with EPSG:3035 coordinates
-    and reprojects occurrences to EPSG:4326 (WGS84).
-    """
+    """Parse JRC EU-Forest CSV (EPSG:3035) and reproject occurrences to WGS84."""
     if not file_path.exists():
         raise FileNotFoundError(f"EU-Forest file not found: {file_path}")
 
@@ -89,12 +86,14 @@ def fetch_gbif_occurrences(
     target_species: str = "Picea abies",
     target_records: int = 10000,
 ) -> pd.DataFrame:
-    """
-    Retrieves verified research-grade occurrences from the GBIF API.
-    """
     config = load_config()
-    start_year = config["temporal"]["start_date"][:4]
-    end_year = config["temporal"]["end_date"][:4]
+    temporal_cfg = config.get("temporal", {})
+    raw_start = temporal_cfg.get("start_date") or temporal_cfg.get(
+        "baseline_start_date", "1995-01-01"
+    )
+    raw_end = temporal_cfg.get("end_date") or temporal_cfg.get("target_year", 2018)
+    start_year = str(raw_start)[:4]
+    end_year = str(raw_end)[:4]
 
     logger.info(f"Resolving taxonKey for '{target_species}'...")
     match = species.name_backbone(species=target_species)
@@ -161,16 +160,28 @@ def fetch_gbif_occurrences(
         for r in raw_records
     ]
 
+    if not parsed:
+        logger.warning(f"No GBIF occurrences found for '{target_species}'.")
+        return pd.DataFrame(
+            columns=[
+                "obs_id",
+                "species",
+                "country",
+                "lat",
+                "lon",
+                "year",
+                "source",
+                "coordinate_uncertainty_m",
+                "target",
+            ]
+        )
+
     df = pd.DataFrame(parsed).dropna(subset=["lat", "lon"]).drop_duplicates(subset=["lat", "lon"])
     logger.info(f"Retrieved {len(df)} unique occurrences from GBIF.")
     return df
 
 
 def extract_from_local(file_path: Path, target_species: str) -> pd.DataFrame:
-    """
-    Loads local forest inventory data (Shapefile, GeoPackage, CSV)
-    and standardizes coordinates to WGS84.
-    """
     logger.info(f"Reading local inventory source: {file_path}")
     if file_path.suffix.lower() in [".gpkg", ".shp", ".geojson"]:
         gdf = gpd.read_file(file_path)
@@ -225,9 +236,6 @@ def extract_from_local(file_path: Path, target_species: str) -> pd.DataFrame:
 
 
 def extract_all_raw_data() -> pd.DataFrame:
-    """
-    Main extraction pipeline routing input sources based on configuration.
-    """
     config = load_config()
     source_type = config.get("data_source", {}).get("type", "eu_forest").lower()
     target_species = config["project"].get("target_species", "Picea abies")

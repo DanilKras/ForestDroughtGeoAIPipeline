@@ -1,17 +1,14 @@
-import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-import fsspec
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import planetary_computer
-import pystac_client
 import urllib3
 import xarray as xr
 
 from utils.config_loader import load_config
+from utils.geospatial import open_stac_catalog, open_terraclimate_zarr
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,20 +39,8 @@ def extract_drought_resilience_labels(target_year: Optional[int] = None) -> pd.D
     if "obs_id" not in gdf_forest.columns:
         gdf_forest["obs_id"] = [f"obs_{i}" for i in range(len(gdf_forest))]
 
-    catalog = pystac_client.Client.open(
-        "https://planetarycomputer.microsoft.com/api/stac/v1",
-        modifier=planetary_computer.sign_inplace,
-    )
-    collection = catalog.get_collection("terraclimate")
-    zarr_url = collection.assets["zarr-https"].href
-    signed_url = planetary_computer.sign(zarr_url)
-
-    parsed = urllib.parse.urlsplit(signed_url)
-    base_endpoint = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    sas_params = dict(urllib.parse.parse_qsl(parsed.query))
-
-    store = fsspec.get_mapper(base_endpoint, params=sas_params)
-    ds = xr.open_zarr(store, consolidated=True)
+    catalog = open_stac_catalog(verify_ssl=True, sign_inplace=True)
+    ds = open_terraclimate_zarr(catalog)
 
     summer_start = f"{year}-{season_start}"
     summer_end = f"{year}-{season_end}"
@@ -87,17 +72,18 @@ def extract_drought_resilience_labels(target_year: Optional[int] = None) -> pd.D
     q_high = float(np.nanquantile(cwd, 0.60))
 
     logger.info(
-        f"[{year}] CWD range: [{np.nanmin(cwd):.1f}, {np.nanmax(cwd):.1f}] mm. "
+        f"[{year}] Summer CWD (exposure proxy = PET - PPT) range: "
+        f"[{np.nanmin(cwd):.1f}, {np.nanmax(cwd):.1f}] mm. "
         f"Thresholds: Q40 = {q_low:.1f} mm, Q60 = {q_high:.1f} mm"
     )
 
     df_vulnerable = gdf_forest[gdf_forest["summer_cwd_mm"] >= q_high].copy()
     df_vulnerable["target"] = 1
-    df_vulnerable["class_description"] = "Drought_Vulnerable_Hydraulic_Stress"
+    df_vulnerable["class_description"] = "Drought_Exposure_High_CWD_Q60"
 
     df_resilient = gdf_forest[gdf_forest["summer_cwd_mm"] <= q_low].copy()
     df_resilient["target"] = 0
-    df_resilient["class_description"] = "Resilient_Moisture_Buffered"
+    df_resilient["class_description"] = "Drought_Exposure_Low_CWD_Q40"
 
     n_samples = min(len(df_vulnerable), len(df_resilient))
     if n_samples < 50:
@@ -107,11 +93,11 @@ def extract_drought_resilience_labels(target_year: Optional[int] = None) -> pd.D
         median_cwd = float(np.nanmedian(cwd))
         df_vulnerable = gdf_forest[gdf_forest["summer_cwd_mm"] >= median_cwd].copy()
         df_vulnerable["target"] = 1
-        df_vulnerable["class_description"] = "Drought_Vulnerable_Hydraulic_Stress"
+        df_vulnerable["class_description"] = "Drought_Exposure_High_CWD_Median"
 
         df_resilient = gdf_forest[gdf_forest["summer_cwd_mm"] < median_cwd].copy()
         df_resilient["target"] = 0
-        df_resilient["class_description"] = "Resilient_Moisture_Buffered"
+        df_resilient["class_description"] = "Drought_Exposure_Low_CWD_Median"
         n_samples = min(len(df_vulnerable), len(df_resilient))
 
     df_balanced = pd.concat(

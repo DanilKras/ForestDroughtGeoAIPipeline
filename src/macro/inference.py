@@ -1,46 +1,30 @@
 import time
-import urllib.parse
 from pathlib import Path
+from typing import Any
 
-import fsspec
 import numpy as np
 import pandas as pd
-import planetary_computer
-import pystac_client
 import rasterio
 import rasterio.warp
 import urllib3
 import xarray as xr
 import xgboost as xgb
-from pystac_client.stac_api_io import StacApiIO
 from rasterio.enums import Resampling
 
+from utils.categorical import load_categorical_schema, prepare_categorical_features
 from utils.config_loader import load_config
+from utils.geospatial import open_stac_catalog, open_terraclimate_zarr
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _open_terraclimate_zarr(catalog) -> xr.Dataset:
-    collection_clim = catalog.get_collection("terraclimate")
-    zarr_url = collection_clim.assets["zarr-https"].href
-    signed_url = planetary_computer.sign(zarr_url)
-
-    parsed_url = urllib.parse.urlsplit(signed_url)
-    base_url = urllib.parse.urlunsplit(
-        (parsed_url.scheme, parsed_url.netloc, parsed_url.path, "", "")
-    )
-    sas_dict = dict(urllib.parse.parse_qsl(parsed_url.query))
-
-    store = fsspec.get_mapper(base_url, params=sas_dict)
-    return xr.open_zarr(store, consolidated=True)
+_open_terraclimate_zarr = open_terraclimate_zarr
 
 
 def _fetch_terraclimate_subset(
-    catalog,
+    catalog: Any,
     climate_vars: list[str],
     start_date: str,
     end_date: str,
@@ -58,7 +42,7 @@ def _fetch_terraclimate_subset(
 
         for attempt in range(1, max_retries + 1):
             try:
-                ds_curr = _open_terraclimate_zarr(catalog)
+                ds_curr = open_terraclimate_zarr(catalog)
                 chunk = (
                     ds_curr[climate_vars]
                     .sel(time=slice(yr_start, yr_end), lat=lat_slice, lon=lon_slice)
@@ -92,13 +76,7 @@ def generate_risk_map() -> None:
         f"Generating landscape vulnerability raster for: {config['project']['region_name']}"
     )
 
-    stac_io = StacApiIO()
-    stac_io.session.verify = False
-    catalog = pystac_client.Client.open(
-        "https://planetarycomputer.microsoft.com/api/stac/v1",
-        modifier=planetary_computer.sign_inplace,
-        stac_io=stac_io,
-    )
+    catalog = open_stac_catalog(verify_ssl=False, sign_inplace=True)
 
     env_kwargs = {
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
@@ -163,15 +141,25 @@ def generate_risk_map() -> None:
                 resampling=Resampling.nearest,
             )
 
-    valid_mask = (elevation_matrix > 0) & (landcover_matrix == 10)
+    forest_mask_val = int(config.get("features", {}).get("forest_mask_value", 10))
+    valid_mask = (
+        np.isfinite(elevation_matrix)
+        & (elevation_matrix > 0)
+        & np.isfinite(slope_matrix)
+        & np.isfinite(northness_matrix)
+        & np.isfinite(twi_matrix)
+        & (landcover_matrix == forest_mask_val)
+    )
     num_valid = np.count_nonzero(valid_mask)
-    logger.info(f"Target forest pixels for model inference: {num_valid:,}")
+    logger.info(
+        f"Target forest pixels for exposure inference (mask == {forest_mask_val}): {num_valid:,}"
+    )
 
     if num_valid == 0:
         raise ValueError("No forest pixels found within the selected bounding box.")
 
     logger.info("Querying TerraClimate Zarr multidimensional array...")
-    ds_ref = _open_terraclimate_zarr(catalog)
+    ds_ref = open_terraclimate_zarr(catalog)
 
     pad = 0.15
     lat_slice = (
@@ -193,7 +181,7 @@ def generate_risk_map() -> None:
     climate_vars = config.get("climate", {}).get("variables", ["tmax", "tmin", "ppt"])
 
     logger.info(
-        f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} forecast..."
+        f"Using historical climate baseline {start_date}..{end_date} for {forecast_year} exposure map..."
     )
     ds_sub = _fetch_terraclimate_subset(
         catalog=catalog,
@@ -224,23 +212,73 @@ def generate_risk_map() -> None:
 
     bio_grid = bio_ds.interp(lat=grid_lats, lon=grid_lons, method="linear")
 
-    features_dict = {
-        "elevation": elevation_matrix[valid_mask],
-        "slope_deg": slope_matrix[valid_mask],
-        "northness_aspect": northness_matrix[valid_mask],
-        "twi_moisture_index": twi_matrix[valid_mask],
-        "landcover_class": landcover_matrix[valid_mask],
-        "bio1_mean_temp": bio_grid["bio1"].values[valid_mask],
-        "bio4_temp_seasonality": bio_grid["bio4"].values[valid_mask],
-        "bio12_annual_precip": bio_grid["bio12"].values[valid_mask],
-        "bio15_precip_seasonality": bio_grid["bio15"].values[valid_mask],
+    feature_arrays_map = {
+        "elevation": elevation_matrix,
+        "slope_deg": slope_matrix,
+        "northness_aspect": northness_matrix,
+        "twi_moisture_index": twi_matrix,
+        "landcover_class": landcover_matrix,
+        "bio1_mean_temp": bio_grid["bio1"].values.astype(np.float32),
+        "bio4_temp_seasonality": bio_grid["bio4"].values.astype(np.float32),
+        "bio12_annual_precip": bio_grid["bio12"].values.astype(np.float32),
+        "bio15_precip_seasonality": bio_grid["bio15"].values.astype(np.float32),
     }
 
-    X_valid = pd.DataFrame(features_dict)[feature_columns]
-
-    logger.info(f"Loading trained XGBoost model: {model_path}")
+    logger.info(f"Loading trained XGBoost exposure model: {model_path}")
     clf = xgb.XGBClassifier()
     clf.load_model(str(model_path))
+
+    booster = clf.get_booster()
+    model_feature_cols = (
+        list(booster.feature_names) if booster.feature_names else list(feature_columns)
+    )
+    booster_ft = list(booster.feature_types) if booster.feature_types else []
+
+    missing_cols = [col for col in model_feature_cols if col not in feature_arrays_map]
+    if missing_cols:
+        raise ValueError(f"Raster feature stack missing required model columns: {missing_cols}")
+
+    for col in (
+        "bio1_mean_temp",
+        "bio4_temp_seasonality",
+        "bio12_annual_precip",
+        "bio15_precip_seasonality",
+        *model_feature_cols,
+    ):
+        valid_mask &= np.isfinite(feature_arrays_map[col])
+
+    num_valid = np.count_nonzero(valid_mask)
+    if num_valid == 0:
+        raise ValueError("No valid finite forest pixels remain for exposure inference.")
+
+    X_valid = pd.DataFrame(
+        {col: feature_arrays_map[col][valid_mask] for col in model_feature_cols}
+    )[model_feature_cols]
+
+    if "c" in booster_ft:
+        cat_cols = (
+            [col for col, ft in zip(model_feature_cols, booster_ft) if ft == "c"]
+            if len(booster_ft) == len(model_feature_cols)
+            else []
+        )
+        if not cat_cols:
+            cat_cols = [
+                c
+                for c in config.get("features", {}).get("categorical_columns", [])
+                if c in model_feature_cols
+            ]
+        default_lc_cats = config.get("features", {}).get(
+            "landcover_categories", [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+        )
+        schema_path = PROJECT_ROOT / config.get("paths", {}).get(
+            "macro_categorical_schema", "data/02_processed/macro_categorical_schema.json"
+        )
+        cat_schema = load_categorical_schema(
+            schema_path, fallback_categories={"landcover_class": default_lc_cats}
+        )
+        X_valid, _ = prepare_categorical_features(
+            X_valid, model_feature_cols, categorical_cols=cat_cols, categories_map=cat_schema
+        )
 
     probabilities = clf.predict_proba(X_valid)[:, 1]
 
@@ -268,19 +306,7 @@ def generate_risk_map() -> None:
         dst.write(risk_matrix, 1)
     logger.info(f"Landscape vulnerability raster written to: {output_tif}")
 
-    feature_arrays_map = {
-        "elevation": elevation_matrix,
-        "slope_deg": slope_matrix,
-        "northness_aspect": northness_matrix,
-        "twi_moisture_index": twi_matrix,
-        "landcover_class": landcover_matrix,
-        "bio1_mean_temp": bio_grid["bio1"].values.astype(np.float32),
-        "bio4_temp_seasonality": bio_grid["bio4"].values.astype(np.float32),
-        "bio12_annual_precip": bio_grid["bio12"].values.astype(np.float32),
-        "bio15_precip_seasonality": bio_grid["bio15"].values.astype(np.float32),
-    }
-
-    feature_arrays = [feature_arrays_map[col] for col in feature_columns]
+    feature_arrays = [feature_arrays_map[col] for col in model_feature_cols]
 
     feature_stack_tif.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
@@ -289,7 +315,7 @@ def generate_risk_map() -> None:
         driver="GTiff",
         height=dem_shape[0],
         width=dem_shape[1],
-        count=len(feature_columns),
+        count=len(model_feature_cols),
         dtype=np.float32,
         crs=dem_crs,
         transform=transform,
@@ -297,13 +323,13 @@ def generate_risk_map() -> None:
         compress="deflate",
         tiled=True,
     ) as dst:
-        for idx, (col_name, arr) in enumerate(zip(feature_columns, feature_arrays), start=1):
+        for idx, (col_name, arr) in enumerate(zip(model_feature_cols, feature_arrays), start=1):
             layer = arr.copy()
             layer[~valid_mask] = -9999.0
             dst.write(layer, idx)
             dst.set_band_description(idx, col_name)
 
-    logger.info(f"{len(feature_columns)}-band predictor stack written to: {feature_stack_tif}")
+    logger.info(f"{len(model_feature_cols)}-band predictor stack written to: {feature_stack_tif}")
 
 
 if __name__ == "__main__":

@@ -1,32 +1,30 @@
-import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import fsspec
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import planetary_computer
-import pystac_client
 import rasterio
 import urllib3
 import xarray as xr
-from pystac_client.stac_api_io import StacApiIO
 from rasterio.warp import transform as warp_transform
 from shapely.geometry import box
 from tqdm import tqdm
 
 from utils.config_loader import load_config
+from utils.geospatial import open_stac_catalog, open_terraclimate_zarr, terrain_metrics_from_3x3
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def _process_dem_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict]:
-    cell_size_m = 30.0
-    results = []
+def _process_dem_tile(
+    item: Any, sub_df: pd.DataFrame, env_kwargs: dict[str, str]
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
     dem_href = planetary_computer.sign(item.assets["data"].href)
 
     with rasterio.Env(**env_kwargs):
@@ -38,21 +36,10 @@ def _process_dem_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict
                     if 1 <= px < src.width - 1 and 1 <= py < src.height - 1:
                         window = rasterio.windows.Window(px - 1, py - 1, 3, 3)
                         win_data = src.read(1, window=window).astype(np.float32)
-
                         if win_data.shape == (3, 3) and not np.isnan(win_data).any():
-                            elevation = float(win_data[1, 1])
-                            dy = (win_data[2, 1] - win_data[0, 1]) / (2.0 * cell_size_m)
-                            dx = (win_data[1, 2] - win_data[1, 0]) / (2.0 * cell_size_m)
-
-                            slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
-                            slope_deg = float(np.degrees(slope_rad))
-
-                            aspect_rad = np.arctan2(-dy, dx)
-                            northness = float(np.cos(aspect_rad))
-
-                            slope_safe = max(float(slope_rad), 0.001)
-                            twi_val = np.log(cell_size_m / np.tan(slope_safe))
-                            twi = float(np.clip(twi_val, 0.0, 15.0))
+                            elevation, slope_deg, northness, twi = terrain_metrics_from_3x3(
+                                win_data, cell_size_m=30.0
+                            )
                         else:
                             elevation = float(next(src.sample([(lon, lat)]))[0])
                             slope_deg, northness, twi = 0.0, 0.0, 5.0
@@ -74,8 +61,10 @@ def _process_dem_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict
     return results
 
 
-def _process_lc_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict]:
-    results = []
+def _process_lc_tile(
+    item: Any, sub_df: pd.DataFrame, env_kwargs: dict[str, str]
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
     lc_href = planetary_computer.sign(item.assets["map"].href)
     coords = list(zip(sub_df["lon"].values, sub_df["lat"].values))
 
@@ -87,7 +76,7 @@ def _process_lc_tile(item, sub_df: pd.DataFrame, env_kwargs: dict) -> list[dict]
     return results
 
 
-def _assign_points_to_tiles(df: pd.DataFrame, items: list) -> dict:
+def _assign_points_to_tiles(df: pd.DataFrame, items: list[Any]) -> dict[Any, pd.DataFrame]:
     tile_records = []
     items_by_id = {}
     for idx, item in enumerate(items):
@@ -105,13 +94,13 @@ def _assign_points_to_tiles(df: pd.DataFrame, items: list) -> dict:
     joined = gpd.sjoin(gdf_pts, gdf_tiles, how="inner", predicate="within")
     joined = joined.drop_duplicates(subset=["obs_id"])
 
-    grouped = {}
+    grouped: dict[Any, pd.DataFrame] = {}
     for tile_idx, group in joined.groupby("tile_idx"):
         grouped[items_by_id[tile_idx]] = group[["obs_id", "lon", "lat"]]
     return grouped
 
 
-def _extract_soilgrids_vrt(df: pd.DataFrame, env_kwargs: dict) -> pd.DataFrame:
+def _extract_soilgrids_vrt(df: pd.DataFrame, env_kwargs: dict[str, str]) -> pd.DataFrame:
     ph_url = "/vsicurl/https://files.isric.org/soilgrids/latest/data/phh2o/phh2o_0-5cm_mean.vrt"
     clay_url = "/vsicurl/https://files.isric.org/soilgrids/latest/data/clay/clay_0-5cm_mean.vrt"
 
@@ -171,12 +160,7 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
     baseline_end = f"{year - 1}-12-31"
     climate_vars = config["climate"]["variables"]
 
-    stac_io = StacApiIO()
-    stac_io.session.verify = False
-    catalog = pystac_client.Client.open(
-        "https://planetarycomputer.microsoft.com/api/stac/v1",
-        stac_io=stac_io,
-    )
+    catalog = open_stac_catalog(verify_ssl=False, sign_inplace=False)
 
     env_kwargs = {
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
@@ -232,7 +216,10 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
             for f in tqdm(as_completed(futures), total=len(futures), desc="DEM Tiles"):
                 dem_rows.extend(f.result())
 
-        logger.info(f"Fetching ESA WorldCover tiles for bbox {total_bbox}...")
+        logger.info(
+            f"Fetching ESA WorldCover 2021 tiles for bbox {total_bbox} "
+            "(stored strictly for forest-masking & post-event leakage diagnostic, not primary training)"
+        )
         lc_items_all = list(catalog.search(collections=["esa-worldcover"], bbox=total_bbox).items())
         lc_items_2021 = [it for it in lc_items_all if "2021" in it.id] or lc_items_all
         lc_tile_groups = _assign_points_to_tiles(df_missing, lc_items_2021)
@@ -251,7 +238,7 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
 
         df_dem = pd.DataFrame(dem_rows).drop_duplicates("obs_id")
         df_lc = pd.DataFrame(lc_rows).drop_duplicates("obs_id")
-        df_new_terrain = df_dem.merge(df_lc, on="obs_id", how="inner")
+        df_new_terrain = df_dem.merge(df_lc, on="obs_id", how="left")
 
         if not df_new_terrain.empty:
             df_new_idx = df_new_terrain.set_index("obs_id")
@@ -263,7 +250,7 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
                     df_idx[col] = df_new_idx[col].combine_first(df_idx[col])
             df = df_idx.reset_index()
 
-        df = df.dropna(subset=["elevation", "landcover_class", "slope_deg"])
+        df = df.dropna(subset=["elevation", "slope_deg"])
         df = df[df["elevation"] > 0]
 
         terrain_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -279,25 +266,16 @@ def run_advanced_feature_extraction(target_year: Optional[int] = None) -> pd.Dat
         df_to_cache.to_parquet(terrain_ckpt_path, engine="pyarrow", compression="snappy")
         logger.info(f"Saved terrain checkpoint ({len(df_to_cache)} points): {terrain_ckpt_path}")
     else:
-        df = df.dropna(subset=["elevation", "landcover_class", "slope_deg"])
+        df = df.dropna(subset=["elevation", "slope_deg"])
         df = df[df["elevation"] > 0]
 
     if df.empty:
-        raise ValueError(f"[{year}] No valid terrain/landcover records remaining after filtering.")
+        raise ValueError(f"[{year}] No valid terrain records remaining after filtering.")
 
     logger.info(
         f"[{year}] Streaming TerraClimate baseline ({baseline_start} to {baseline_end}, strictly < {year}-01-01)..."
     )
-    collection = catalog.get_collection("terraclimate")
-    zarr_url = collection.assets["zarr-https"].href
-    signed_url = planetary_computer.sign(zarr_url)
-
-    parsed = urllib.parse.urlsplit(signed_url)
-    base_endpoint = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    sas_params = dict(urllib.parse.parse_qsl(parsed.query))
-
-    store = fsspec.get_mapper(base_endpoint, params=sas_params)
-    ds = xr.open_zarr(store, consolidated=True)
+    ds = open_terraclimate_zarr(catalog)
 
     ds_clim = ds[climate_vars].sel(time=slice(baseline_start, baseline_end))
 
